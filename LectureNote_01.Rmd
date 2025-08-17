@@ -1,7 +1,7 @@
 ---
-title: "경제자료분석과 예측"
-author: "시계열자료 "
-date: "경제학과 김현학 교수"
+title: "경제자료분석과 예측 - #01 시계열 자료"
+author: "경제학과 김현학 교수"
+date: "2025년 2학기"
 output:
   html_document:
     toc: true

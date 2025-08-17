@@ -1,0 +1,306 @@
+---
+title: "경제자료분석과 예측 - #02 통계적 예측"
+author: "경제학과 김현학 교수"
+date: "2025년 2학기"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+fontsize: 11pt
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+# ---- 전역 청크 옵션 ----
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = FALSE, fig.width = 8, fig.height = 4)
+```
+
+# 수업 목표와 로드맵
+
+- **예측의 관점**: 포인트 예측(point), 구간/분포 예측(density)의 차이와 목적 이해  
+- **평가 지표**: RMSE/MAE/MAPE/MASE, Pinball loss, Calibration 등 장단점 비교  
+- **검증 전략**: 홀드아웃, 확장(Expanding) 창, 롤링(Rolling) 창, `tsCV()` 기반 시계열 교차검증  
+- **기준 모형(Benchmark)**: 평균, *naïve*, 계절 *naïve*  
+- **모형군**: ETS(지수평활), ARIMA, STL+ETS, 단순 조합(average)  
+- **모형 비교**: Diebold–Mariano 검정, 현실적 유의성(경제적 유의성) 논의  
+- **실습 데이터**: `AirPassengers`(월별 항공여객), `WWWusage`(웹 사용량) 등 내장 데이터
+
+---
+
+# 패키지 불러오기
+
+```{r packages}
+# ---- 분석에 필요한 패키지 로드 ----
+library(forecast)   # 예측 모형(ETS/ARIMA), 정확도(accuracy), tsCV, dm.test 등
+library(tseries)    # 보조 검정(필요 시)
+library(ggplot2)   # 시각화
+library(fpp3)    # Hyndman 데이터셋(선택) - 수업 환경에 설치되어 있으면 사용
+```
+
+
+---
+
+# 데이터 소개와 기초 탐색
+
+본 장은 R 내장 시계열로 예측의 전형적 흐름을 연습한다.
+
+```{r data-peek, fig.height=3.8}
+# ---- 예시 데이터: AirPassengers (월별, 1949-1960) ----
+ap <- AirPassengers
+start(ap); end(ap); frequency(ap)
+
+autoplot(ap) + 
+  ggtitle("AirPassengers: 월별 항공 여객 수") + 
+  xlab("연도") + ylab("승객 수")
+```
+
+**관찰 포인트**  
+- **뚜렷한 추세**(상승)와 **강한 계절성**이 존재  
+- 분산이 시간에 따라 커지는 **이분산성(variance 증가)** → 로그 변환 고려
+
+```{r transform}
+# ---- 로그 변환으로 분산 안정화 ----
+lap <- log(ap)
+autoplot(lap) + ggtitle("로그 변환된 AirPassengers") + xlab("연도") + ylab("log(승객 수)")
+```
+
+---
+
+# 예측의 관점: 포인트 vs. 구간/분포
+
+- **포인트 예측**: 미래 시점의 **대표값(평균/중앙값 등)** 추정  
+- **구간/분포 예측**: 예측의 **불확실성**까지 표현(예: 80%/95% 예측구간, 전체 분포)  
+- 정책·리스크 관리에서는 **분위수/밀도 예측**이 더 중요할 수 있음
+
+```{r baseline-forecasts, fig.height=4.5}
+# ---- 기준 모형(benchmark) 예측 ----
+fit_mean  <- meanf(lap, h = 24)      # 평균모형
+fit_rw    <- rwf(lap, h = 24)        # 랜덤워크(naive)
+fit_snaive<- snaive(lap, h = 24)     # 계절 naïve
+
+autoplot(lap) + 
+  autolayer(fit_mean$mean, series = "Mean") +
+  autolayer(fit_rw$mean,   series = "Naive") +
+  autolayer(fit_snaive$mean, series = "Seasonal Naive") +
+  ggtitle("기준 모형 비교(로그 스케일)") + xlab("연도") + ylab("log(승객 수)") +
+  guides(colour = guide_legend(title = "모형"))
+```
+
+> **좋은 실무 습관**: 우선 간단한 기준모형을 설정하고, 고급 모형은 **기준보다 얼마나 개선되는지**로 평가한다.
+
+---
+
+# 모형 적합: ETS / ARIMA / STL+ETS
+
+```{r models-fit}
+# ---- ETS (지수평활 상태공간) ----
+fit_ets   <- ets(lap)          # 자동 모형 선택
+# ---- ARIMA ----
+fit_arima <- auto.arima(lap, stepwise = FALSE, approximation = FALSE)
+# ---- STL+ETS ----
+fit_stl   <- stlm(lap, s.window = "periodic", method = "ets")
+
+fit_ets
+fit_arima
+fit_stl$model
+```
+
+```{r models-forecast, fig.height=4.5}
+# ---- 24개월 예측 ----
+h <- 24
+fc_ets   <- forecast(fit_ets,   h = h)
+fc_arima <- forecast(fit_arima, h = h)
+fc_stl   <- forecast(fit_stl,   h = h)
+
+autoplot(lap) +
+  autolayer(fc_ets$mean,   series = "ETS") +
+  autolayer(fc_arima$mean, series = "ARIMA") +
+  autolayer(fc_stl$mean,   series = "STL+ETS") +
+  ggtitle("ETS vs ARIMA vs STL+ETS (로그 스케일)") + xlab("연도") + ylab("log(승객 수)")
+```
+
+> **이론 메모**  
+> - **ETS**: 오차(Error)–추세(Trend)–계절(Seasonality) 조합(E, A, M 등) 자동 탐색  
+> - **ARIMA**: 차분으로 정상화 후 ARMA 성분을 적합. 비계절/계절 성분(`seasonal` 인수) 모두 처리 가능  
+> - **STL+ETS**: 계절 성분을 STL로 분해 후 비계절 부분을 ETS로 예측 → 강한 계절성일 때 견고
+
+---
+
+# 평가 지표: RMSE/MAE/MAPE/MASE & 핀볼 손실
+
+- **RMSE**: 큰 오차에 가중(제곱), 외란이 정규에 가까울 때 유리  
+- **MAE**: 이상치에 비교적 강건, 중앙값에 대응  
+- **MAPE**: 0 근처 값에 불안정(분모 문제), 스케일 불변 장점  
+- **MASE**: *naïve* 대비 상대 오차 → **서로 다른 시계열 간 비교 가능**  
+- **Pinball loss**: 분위수 예측 평가(예: 0.1, 0.5, 0.9 분위수)
+
+```{r holdout-split}
+# ---- 홀드아웃: 마지막 24개월을 테스트로 분리 ----
+h <- 24
+n <- length(lap)
+train <- window(lap, end = c(1960 - ceiling((h-1)/12), 12 - ((h-1) %% 12)))
+
+# 간편 대안: window(lap, end=c(1958,12))  # 1959-1960을 테스트로
+train <- window(lap, end=c(1958,12))
+test  <- window(lap, start=c(1959,1))
+
+# 훈련에서 재적합 후 테스트 구간 예측
+fc_ets_te   <- forecast(ets(train),   h = length(test))
+fc_arima_te <- forecast(auto.arima(train, stepwise=FALSE, approximation=FALSE),
+                        h = length(test))
+fc_snaive_te<- forecast(snaive(train), h = length(test))
+
+# 정확도 비교 (원래 스케일로 보고 싶다면 exp() 변환 고려)
+acc_ets   <- accuracy(fc_ets_te,   test)
+acc_arima <- accuracy(fc_arima_te, test)
+acc_snaive<- accuracy(fc_snaive_te, test)
+
+rbind(ETS=acc_ets[2, c("RMSE","MAE","MAPE","MASE")],
+      ARIMA=acc_arima[2, c("RMSE","MAE","MAPE","MASE")],
+      SNAIVE=acc_snaive[2, c("RMSE","MAE","MAPE","MASE")])
+```
+
+> **실무 팁**: 로그 스케일로 학습했다면 예측을 `exp()`로 되돌릴 때 **Jensen 부등식**에 의한 바이어스 보정(예: `exp(pred + s2/2)`)을 검토하자.
+
+---
+
+# 시계열 교차검증(tsCV)와 롤링/확장 창
+
+```{r tscv, fig.height=4.2}
+# ---- tsCV: 한 시점씩 앞 예측 오차 축적 ----
+# 예시: ARIMA 1-step ahead 오류
+e_arima <- tsCV(lap, forecastfunction = function(y, h) {
+  forecast(auto.arima(y, stepwise=TRUE, approximation=TRUE), h=h)
+}, h = 1)
+
+e_snaive <- tsCV(lap, function(y, h) forecast(snaive(y), h=h), h=1)
+
+# 평균제곱오차 비교(NA 제외)
+rmse_arima  <- sqrt(mean(e_arima^2,  na.rm=TRUE))
+rmse_snaive <- sqrt(mean(e_snaive^2, na.rm=TRUE))
+c(RMSE_ARIMA = rmse_arima, RMSE_SNAIVE = rmse_snaive)
+```
+
+> **검증 전략**  
+> - **확장 창(Expanding)**: 시작은 짧게, 시간이 지날수록 훈련 기간 확장  
+> - **롤링 창(Rolling)**: 고정된 창 길이를 유지하며 순차적으로 이동  
+> - **tsCV**는 체계적으로 한 단계 또는 여러 단계 앞 예측오차를 모아 비교
+
+---
+
+# 모형 비교의 통계적 검정: Diebold–Mariano
+
+동일한 타깃, 동일한 테스트 구간에서 두 모형의 예측오차를 비교할 때 사용.
+
+```{r dm-test}
+# ---- 동일 테스트 구간에서 ETS vs ARIMA 비교 ----
+e1 <- test - fc_ets_te$mean
+e2 <- test - fc_arima_te$mean
+
+# 손실함수: 제곱오차 (power = 2), h=1일 때 유효
+forecast::dm.test(e1, e2, h = 1, power = 2)
+```
+
+> **해석**: p-value < 0.05 → 두 모형의 예측성능(평균 손실)이 통계적으로 유의하게 다름.  
+> **주의**: 다단계 예측(h>1)에서는 표준 DM 절차의 가정 위반 가능성에 주의.
+
+---
+
+# 예측구간과 밀도 예측, 보정(calibration)
+
+```{r intervals, fig.height=4.5}
+# ---- 80%/95% 예측구간 시각화 ----
+autoplot(fc_arima_te) + ggtitle("ARIMA: 80%/95% 예측구간 (로그 스케일)")
+
+# ---- 간단한 구간 적중률 체크(실제 로그 스케일 기준) ----
+inside95 <- mean(test >= fc_arima_te$lower[,"95%"] & test <= fc_arima_te$upper[,"95%"])
+inside80 <- mean(test >= fc_arima_te$lower[,"80%"] & test <= fc_arima_te$upper[,"80%"])
+c(Coverage80 = inside80, Coverage95 = inside95)
+```
+
+> **보정(Calibration)**: 목표 신뢰수준(예: 95%) 대비 실제 포함비율이 지속적으로 낮다면 **과소/과대 신뢰** 문제를 의심하고 폭 조정·모형 변경을 고려.
+
+---
+
+# 조합 예측(Ensemble)과 실무 팁
+
+```{r combine, fig.height=4.5}
+# ---- 단순 평균 조합 (수정: 지표 계산 안전화) ----
+fc_mean <- (fc_ets_te$mean + fc_arima_te$mean + fc_snaive_te$mean)/3
+
+autoplot(lap) + 
+  autolayer(test, series="실제(테스트)") +
+  autolayer(fc_mean, series="단순 조합(평균)") +
+  ggtitle("단순 조합 예측") + xlab("연도") + ylab("log(승객 수)")
+
+# 정확도 계산(테스트 구간 기준)
+fc_mean_ts <- ts(as.numeric(fc_mean), start = start(test), frequency = frequency(test))
+
+# 1) 기본 지표
+RMSE <- sqrt(mean((test - fc_mean_ts)^2, na.rm=TRUE))
+MAE  <- mean(abs(test - fc_mean_ts), na.rm=TRUE)
+MAPE <- mean(abs((test - fc_mean_ts)/test), na.rm=TRUE) * 100
+
+# 2) MASE (훈련 구간에 대한 계절 naive 기준 스케일)
+m <- frequency(train)
+if (m > 1) {
+  denom <- mean(abs(train[(m+1):length(train)] - train[1:(length(train)-m)]), na.rm=TRUE)
+} else {
+  denom <- mean(abs(diff(train)), na.rm=TRUE)
+}
+MASE <- MAE / denom
+
+acc_comb <- data.frame(RMSE=RMSE, MAE=MAE, MAPE=MAPE, MASE=MASE)
+acc_comb
+```
+
+> **실무 팁**: 상보적인 모형을 **가중 평균**으로 조합하면 일반적으로 분산이 줄어 성능이 안정화.
+
+---
+
+# 비계절 예시(WWWusage)와 자동화
+
+```{r wwwusage, fig.height=4.2}
+w <- WWWusage
+autoplot(w) + ggtitle("WWWusage (분 단위 웹 사용량)") + xlab("시간") + ylab("사용량")
+
+fw_arima <- forecast(auto.arima(w), h = 20)
+fw_ets   <- forecast(ets(w), h = 20)
+
+autoplot(w) + autolayer(fw_arima$mean, series="ARIMA") + autolayer(fw_ets$mean, series="ETS") +
+  ggtitle("WWWusage 예측 비교") + xlab("시간") + ylab("사용량")
+```
+
+---
+
+# 흔한 함정과 체크리스트
+
+- **데이터 누수(leakage)**: 미래 정보가 특징/모형에 유입되지 않도록 분할과 전처리 순서 주의  
+- **MAPE의 문제**: 0 근처 값, 음수 값에서 불안정 → MAE/MASE 병행  
+- **스케일 문제**: 로그/Box–Cox 변환 시 역변환 바이어스 보정 고려  
+- **벤치마크**: *naïve/seasonal naïve*를 항상 포함해 상대 성능을 확인  
+- **경제적 유의성**: 통계적 유의성 외에 **정책/거래비용/위험회피** 등의 맥락적 의미 평가
+
+---
+
+# 용어 정리
+
+* **예측 대상**: 확률변수 $y_t$.
+* **예측 분포**: $\mathcal{I}$를 모든 관측치(정보)라고 하면, $y_t \mid \mathcal{I}$는 “정보 $\mathcal{I}$가 주어졌을 때의 확률변수 $y_t$”를 의미한다.
+* **점 예측(point forecast)**: $y_t \mid \mathcal{I}$의 **평균(또는 중앙값)**.
+* **예측 분산(forecast variance)**: $\mathrm{Var}\!\left[y_t \mid \mathcal{I}\right]$.
+* **예측구간(구간 예측, prediction interval)**: 높은 확률로 $y_t$가 포함될 값의 범위(예: $(1-\alpha)\times 100\%$ 예측구간).
+* **시계열 표기**: $y_{t\mid t-1} = y_t \mid \{y_1, y_2, \dots, y_{t-1}\}$.
+* **$h$-단계 앞 예측**: $\hat{y}_{T+h\mid T} = \mathbb{E}\!\left[\,y_{T+h} \mid y_1,\dots,y_T\,\right]$ (시점 $T$까지의 모든 관측을 이용한 $h$-스텝 예측).
+
+
+---
+
+# 과제
+
+1. `AirPassengers`를 대상으로 **STL+ETS**와 **ARIMA**의 `tsCV` 기반 1-step RMSE를 비교하고, **DM 검정**으로 유의한 차이가 있는지 확인하라.  
+2. `Water` 또는 `WWWusage` 자료로 **홀드아웃(마지막 20%)**을 설정해 ETS/ARIMA/조합 모형의 RMSE·MAE·MASE를 비교하라.  
+3. `snaive()`를 벤치마크로 하여 **MASE < 1**을 달성하는 모형을 찾아라. 파라미터/전처리 선택을 서술하라.
