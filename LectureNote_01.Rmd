@@ -80,7 +80,7 @@ library(fanplot)
 url_base <- "http://ecos.bok.or.kr/api/StatisticSearch"
 
 # ⚠️ 본인 API 키로 교체
-id <- "3MC5G7KEZK10KZMVU8CI"
+id <- "Your key"
 
 요청유형 <- "json"
 언어구분 <- "kr"
@@ -441,5 +441,6 @@ legend("topleft", c("Actual GDP QoQ","ARDL Fitted"),
 - **NA/비정상**: 로그/차분 전 0·음수 여부 확인.  
 - **ADF 옵션 선택**: 추세가 뚜렷하면 `type="trend"`, 그렇지 않으면 `drift/none`.  
 - **fanplot start/anchor**: `start`, `frequency`, `anchor`를 실제 시계열과 일치시키기.
+
 
 
