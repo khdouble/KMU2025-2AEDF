@@ -1,0 +1,929 @@
+---
+title: "경제자료분석과 예측 - #04 시계열 변환"
+author: "경제학과 김현학 교수"
+date: "2025년 2학기"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+# ---- 전역 옵션 ----
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width=7, fig.height=3.6, cache=FALSE, dev='png', dpi=150)
+
+# Knit 시 X-13ARIMA-SEATS 경로를 명시적으로 설정
+Sys.setenv(X13_PATH = x13binary::x13path())
+
+# --- 이 부분의 주석을 해제하세요! ---
+# 프로젝트 루트 기준 경로 고정
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+# --------------------------------
+
+suppressPackageStartupMessages({
+  library(tsibble); library(fabletools); library(fable); library(feasts); library(rprojroot) # rprojroot 추가
+  library(dplyr); library(ggplot2); library(lubridate); library(tsibbledata)
+  library(tidyr); library(knitr);library(fpp3);library(seasonal);library(x13binary);library(purrr); library(transformer); library(gganimate)
+})
+```
+
+```{r data-guards, include=FALSE}
+suppressPackageStartupMessages({
+  library(tsibbledata)  # us_employment
+  library(dplyr)
+})
+
+# 없으면 생성: 미국 주별 고용에서 'Retail Trade'만 추출
+if (!exists("us_retail_employment")) {
+  us_retail_employment <- fpp3::us_employment %>%
+    dplyr::filter(Title == "Retail Trade", !is.na(Employed))
+  # 참고: 변수들 — Month(지수), State(키), Title, Adjusted, Employed 등
+}
+```
+
+# 시계열의 구성요소 분해 
+
+## 시계열 자료의 특성
+-   시계열 자료(time series data)는 다양한 패턴을 보일 수 있으며,\
+    각 패턴 유형을 나타내는 여러 구성요소로 분리하면 분석에 도움이 된다.
+
+-   지난 수업에서는 시계열 패턴의 세 가지 유형을 논의했다:\
+    **추세(trend)**, **계절성(seasonality)**, 그리고 **순환(cycles)**.
+
+-   시계열을 구성요소로 분해할 때는 일반적으로\
+    추세(trend)와 순환(cycle)을 하나의 **추세-순환(trend-cycle)**
+    구성요소로 통합한다.\
+    (간단히 “추세(trend)”라고 부르기도 한다.)
+
+## 시계열 자료의 구성요소
+-   따라서 시계열은 다음의 세 가지 구성요소로 생각할 수 있다:
+
+    1.  **추세-순환(trend-cycle)** 구성요소\
+    2.  **계절성(seasonal)** 구성요소\
+    3.  **잔차(remainder)** 구성요소 — 시계열의 나머지 변동 요인을 포함
+
+-   일부 시계열(예: 일 단위 이상으로 관측된 자료)의 경우,\
+    서로 다른 주기(period)를 갖는 **복수의 계절성** 구성요소가 존재할 수 있다.
+
+## 수업 목표
+
+-   이 장에서는 시계열에서 이러한 구성요소를 추출하는 대표적인 방법을
+    다룬다.\
+    이러한 분해는 시계열에 대한 이해를 높이는 데 도움이 될 뿐 아니라,\
+    **예측 정확도를 향상**시키는 데에도 유용하다.
+
+-   시계열을 분해하기 전에, 분석을 더 단순하게 만들기 위해\
+    시계열을 **변환(transform)** 하거나 **조정(adjust)** 하는 것이
+    유용할 수 있다.\
+    따라서 본 장에서는 변환과 조정에 대한 논의로부터 시작한다.
+
+# 변수 변환
+
+## 변수 변환과 적응(adjustment)
+
+-   **목적:**\
+    과거 자료의 알려진 변동 요인을 제거하거나, 전 구간에서 변동 패턴을
+    더 일관되게 만들어 **모형화와 예측을 단순화/정확화**한다.
+
+-   **범주:**
+
+    1.  달력(Calendar) 조정\
+    2.  인구(Population) 조정\
+    3.  물가(인플레이션) 조정\
+    4.  수학적 변환(Mathematical transformation)
+
+
+## 달력(Calendar) 조정
+
+-   월별/분기별 총합에는 **영업일 수 차이 등 달력 효과**가 섞인다.\
+    → 예: **월 매출 총액 대신 영업일당 평균 매출**을 사용하면 달력
+    변동을 제거할 수 있다.
+
+
+## 인구(Population) 조정
+
+-   **인구 규모 변화**로 인해 총량 비교가 왜곡될 수 있다.\
+    → **1인당(또는 천/백만 인당) 값**으로 바꾸면 총량 증가에도 불구하고
+    **실질적인 변화(감소 등)**를 해석할 수 있다.\
+    → 예: `global_economy` 데이터의 **GDP per capita** 사용.
+
+## 인구(Population) 조정전
+```{r rs31_gdp-per-capita, message=FALSE, warning=FALSE, fig.width=7, fig.height=3.8, out.width='100%'}
+global_economy |>
+  filter(Country == "Australia") |>
+  autoplot(GDP)
+```
+
+## 인구(Population) 조정후
+```{r rs31_gdp-per-capita2, message=FALSE, warning=FALSE, fig.width=7, fig.height=3.8, out.width='100%'}
+global_economy |>
+  filter(Country == "Australia") |>
+  autoplot(GDP / Population)
+```
+
+
+## 물가(인플레이션) 조정
+
+-   **화폐 가치 변화**로 인해 시계열의 명목적 변화와 실질적 변화가
+    뒤섞일 수 있다. → **가격지수(예: CPI)** 를 사용하여 기준연도의 실질 화폐 단위로
+    환산한다.
+
+-   **조정식:**\
+    $$
+    x_t = \frac{y_t}{z_t} \times z_{2000}
+    $$\
+    (여기서 $y_t$: 원시계열, $z_t$: 가격지수, $x_t$: 물가조정된 시계열)
+
+-   **효과:**\
+    물가 조정 후에는 **실질 추세(real trend)** 가 드러나며, 명목
+    데이터와 다른 해석이 가능하다.
+-   명목변수를 인플레이션 조정을 통해서 실질변수화
+
+## 물가(인플레이션) 조정
+
+```{r inflatio_adjustment, echo=FALSE,fig.width=7, fig.height=3.8, out.width='100%'}
+# 예시 코드: CPI로 물가조정(개념 예시 — 데이터 가용 시 실행)
+library(fpp3)
+
+print_retail <- aus_retail |>
+  filter(Industry == "Newspaper and book retailing") |>
+  group_by(Industry) |>
+  index_by(Year = year(Month)) |>
+  summarise(Turnover = sum(Turnover))
+
+aus_economy <- global_economy |>
+  filter(Code == "AUS") |>
+  select(Year, CPI)
+
+print_retail |>
+  left_join(aus_economy, by = "Year") |>
+  mutate(Adjusted_turnover = Turnover / CPI * 100) |>
+  pivot_longer(c(Turnover, Adjusted_turnover), values_to = "Turnover") |>
+  mutate(name = factor(name, levels=c("Turnover","Adjusted_turnover"))) |>
+  ggplot(aes(x = Year, y = Turnover)) +
+  geom_line() +
+  facet_grid(name ~ ., scales = "free_y") +
+  labs(title = "Print media turnover (nominal vs. CPI-adjusted)", y = "AU$")
+
+```
+
+## 수학적 변환(Mathematical Transformations)
+
+-   **목적:**\
+    시계열의 변동폭이 수준에 따라 달라지는 **분산
+    비정상성(heteroscedasticity)** 을 완화하고, **모형 단순화 및 예측
+    안정성**을 높인다.
+
+-   시계열에서 값의 **수준(level)** 이 커질수록 **변동성(분산)** 도
+    커지는 패턴(이분산성)이 보이면, **변환**이 유용하다.
+
+-   원자료를 $y_1,\dots,y_T$, 변환 후 자료를 $w_1,\dots,w_T$라 두자.
+
+## 로그(Log) 변환
+
+-   식:\
+    $$
+    w_t = \log(y_t)
+    $$
+
+-   **특징:**
+
+    -   변동의 상대적 크기(%)를 일정하게 만들어준다.\
+    -   로그 차이 ≈ **비율(%) 변화율**로 해석 가능.\
+    -   단, $y_t \le 0$ 인 경우에는 적용 불가.
+
+
+## 거듭제곱(Power) 변환
+
+-   식:\
+    $$
+    w_t = y_t^p
+    $$
+
+-   **특징:**
+
+    -   $p < 1$일 때 큰 값의 영향을 줄이며 분산을 안정화한다.\
+    -   로그 변환보다 직관성은 떨어지지만, **음수 값 처리에는
+        유연**하다.
+
+| 변환     | 수식                |
+|----------|---------------------|
+| 제곱근   | $w_t=\sqrt{y_t}$    |
+| 세제곱근 | $w_t=\sqrt[3]{y_t}$ |
+| 로그     | $w_t=\log(y_t)$     |
+
+## 왜 로그가 해석에 유리한가?
+
+-   **효과 강도(약 → 강)**: 제곱근 \< 세제곱근 \< 로그\
+-   경험 법칙
+    -   $\operatorname{Var}(y_t)\propto \mathbb{E}(y_t)$ (대략 포아송형)
+        → $\sqrt{y_t}$가 안정화에 유리\
+    -   $\operatorname{Var}(y_t)\propto \mathbb{E}(y_t)^2$ (승수적 오차)
+        → $\log y_t$가 유리
+-   승수적 잡음 모형 $y_t=\mu_t\exp(\varepsilon_t)$이면 $$
+    \log y_t=\log \mu_t+\varepsilon_t,
+    $$ 즉 **가산형**으로 단순화되어 선형 모형 적용이 쉬워진다.
+-   로그 변화는 **상대(%) 변화**다: $$
+    \Delta \log y_t \approx \frac{y_t-y_{t-1}}{y_{t-1}}\ (\text{비율 변화}).
+    $$
+
+## Box–Cox 변환
+
+-   식:\
+    $$
+    w_t =
+    \begin{cases}
+    \log(y_t), & \lambda = 0 \\
+    \dfrac{\mathrm{sign}(y_t)\,|y_t|^\lambda - 1}{\lambda}, & \lambda \ne 0
+    \end{cases}
+    $$
+
+-   **특징:**
+
+    -   $\lambda = 0$: 로그 변환과 동일\
+    -   $\lambda = 1$: 원자료 그대로\
+    -   $\lambda > 0$: **음수 값 포함 가능(수정형)**\
+    -   목적: **분산 안정화 및 비선형 관계 완화**
+
+## $\lambda$ 선택 – Guerrero 방법
+
+-   **Guerrero(1993)** 방법을 사용하면, 계절 변동의 상대적 크기를
+    일정하게 만드는\
+    최적의 $\lambda$를 자동으로 선택할 수 있다.
+-   계절 변동의 상대적 크기를 일정하게 만드는 $\lambda$ 실무적으로 유리.
+-   `features(..., guerrero)`로 자동 선택 가능(예: 가스 생산자료에
+    $\lambda \approx 0.1$
+
+## $\lambda$ 선택 – Guerrero 방법
+```{r guerrer_lambda, echo=FALSE,fig.width=7, fig.height=3.8, out.width='100%'}
+# 예시 코드: Guerrero 방법으로 lambda 선택 & Box–Cox 변환
+lambda <- aus_production |>
+  features(Gas, features = guerrero) |>
+  pull(lambda_guerrero)
+
+aus_production |>
+  autoplot(box_cox(Gas, lambda)) +
+  labs(
+    y = "",
+    title = paste0("Transformed gas production (lambda = ", round(lambda, 2), ")")
+  )
+
+```
+
+## 이론 요약
+
+-   목적: **분산 안정화**, **선형화**, **승수형 → 가산형**
+    변환(log/Box–Cox).
+-   Box–Cox 변환:
+    $y_t^{(\lambda)} = \begin{cases}\dfrac{y_t^{\lambda}-1}{\lambda}, & \lambda\ne0\\ \log(y_t), & \lambda=0\end{cases}$
+    (양의 $y_t$에서 정의).
+-   승수형 계절·이분산이 강할 때 **로그 변환**이 간단하고 해석(%)이
+    용이.
+-   로그 스케일 예측의 역변환 시 **편의(Bias) 보정**:
+    $\mathrm{E}[\exp(X)] = \exp(\mu+\sigma^2/2)$.
+
+## 역변환과 바이어스 보정
+
+-   로그 스케일에서 예측(또는 잔차 분산 $s^2$)이 있다면, 원스케일 기대값
+    보정: $$
+    \mathbb{E}(Y)\approx \exp(m+s^2/2)\quad(\text{Jensen 보정}).
+    $$
+-   Box–Cox의 역변환은 $\lambda\neq 0$에서
+    $y_t=(\lambda w_t+1)^{1/\lambda}$.\
+    로그 외 변환에서도 **Duan의 smearing** 등 경험적 보정을 고려할 수
+    있다.
+
+## 예시
+
+```{r, message=FALSE, warning=FALSE}
+# 모의 데이터: 수준↑ → 분산↑ (승수적 오차)
+set.seed(1)
+t  <- 1:200
+mu <- exp(0.01*t)           # 완만한 성장 추세
+y  <- mu * exp(rnorm(200, 0, 0.2))
+# 변환
+y_sqrt <- sqrt(y)
+y_log  <- log(y)
+# 전반부/후반부 표준편차 비교로 분산 안정화 확인
+seg <- rep(c("H1","H2"), each = 100)
+sd_raw  <- tapply(y,      seg, sd)
+sd_sqrt <- tapply(y_sqrt, seg, sd)
+sd_log  <- tapply(y_log,  seg, sd)
+rbind(Raw=sd_raw, Sqrt=sd_sqrt, Log=sd_log)
+```
+
+## 예제: 호주 식품소매업 : 다양한 변환 방법
+
+```{r rs31_food, message=FALSE, warning=FALSE, fig.width=7, fig.height=3.8, out.width='100%'}
+
+food <- aus_retail |>
+  filter(Industry == "Food retailing") |>
+  summarise(Turnover = sum(Turnover))
+```
+
+## 예제: 호주 식품소매업 : 다양한 변환 방법
+```{r rs31_food-plot, message=FALSE, warning=FALSE, fig.width=7, fig.height=3.8, out.width='100%'}
+
+food |> autoplot(Turnover) +
+  labs(y = "Turnover ($AUD)")
+```
+
+## 예제: 호주 식품소매업 : 다양한 변환 방법
+```{r rs31_food-sqrt1, message=FALSE, warning=FALSE, fig.width=7, fig.height=3.8, out.width='100%'}
+
+food |> autoplot(sqrt(Turnover)) +
+  labs(y = "Square root turnover")
+```
+
+## 예제: 호주 식품소매업 : 다양한 변환 방법
+```{r rs31_food-cbrt, message=FALSE, warning=FALSE, fig.width=7, fig.height=3.8, out.width='100%'}
+
+food |> autoplot(Turnover^(1 / 3)) +
+  labs(y = "Cube root turnover")
+```
+
+## 예제: 호주 식품소매업 : 다양한 변환 방법
+```{r rs31_food-log, message=FALSE, warning=FALSE, fig.width=7, fig.height=3.8, out.width='100%'}
+
+food |> autoplot(log(Turnover)) +
+  labs(y = "Log turnover")
+```
+
+## 예제: 호주 식품소매업 : 다양한 변환 방법
+```{r rs31_food-inverse, message=FALSE, warning=FALSE, fig.width=7, fig.height=3.8, out.width='100%'}
+
+food |> autoplot(-1 / Turnover) +
+  labs(y = "Inverse turnover")
+```
+
+## Box–Cox 변환 응용
+
+-   수준(값의 크기)에 따라 변동성이 달라지는(이분산) 시계열에서는
+    **변환**이 유용하다.\
+
+-   표준적인 Box–Cox 변환(양의 자료)은 $$
+    w_t=
+    \begin{cases}
+    \dfrac{y_t^\lambda-1}{\lambda}, & \lambda\neq 0,\\[6pt]
+    \log(y_t), & \lambda=0,
+    \end{cases}
+    \qquad (y_t>0)
+    $$ 이다.
+
+## Box–Cox 변환 응용
+
+-   음수 혹은 0을 포함한 자료에는 **Bickel–Doksum(부호 포함) 변환**이나
+    **Yeo–Johnson** 같은 대안을 고려할 수 있는데, Bickel–Doksum 형태는
+    $$
+    w_t=
+    \begin{cases}
+    \dfrac{\operatorname{sign}(y_t)\,\lvert y_t\rvert^\lambda - 1}{\lambda}, & \lambda\neq 0,\\[6pt]
+    \operatorname{sign}(y_t)\,\log\!\lvert y_t\rvert, & \lambda=0,
+    \end{cases}
+    $$ 
+-   $\lambda=1$: 의미 있는 변환 없음(원자료)\
+-   $\lambda=\tfrac12$: 제곱근 변환(선형 이동 포함)\
+-   $\lambda=0$: 자연로그 변환\
+-   $\lambda=-1$: 역수 계열(선형 이동 포함)
+
+## **소결**
+> - 로그 변환은 승수적 잡음 $y_t=\mu_t\exp(\varepsilon_t)$을
+> $\log y_t=\log\mu_t+\varepsilon_t$처럼 **가산형**으로 바꿔 선형모형
+> 적용을 쉽게 한다\
+> - $\Delta\log y_t \approx (y_t-y_{t-1})/y_{t-1}$이므로 **상대(%)
+> 변화**로 해석하기 좋다.
+
+
+```{r boxcox-setup, include=FALSE}
+suppressPackageStartupMessages({
+  library(tsibble)
+  library(tsibbledata)   # 예시 데이터: food(호주 소매판매)
+  library(fabletools)    # box_cox(), features()
+  library(feasts)        # guerrero 특징치
+  library(dplyr); library(tidyr)
+  library(ggplot2)
+})
+```
+
+## (추가) 몇 가지 람다를 고정해 변환 후 선을 비교
+
+```{r lambda_comparison, echo=FALSE,fig.width=7, fig.height=3.8, out.width='100%'}
+food <- aus_retail |>
+  filter(Industry == "Food retailing") |>
+  summarise(Turnover = sum(Turnover))
+
+lams <- tibble::tibble(lambda = c(1, 0.5, 0.25, 0.1, 0))  # 0은 로그
+food_long <- food |>
+  dplyr::select(Month, Turnover) |>
+  tidyr::crossing(lams) |>
+  dplyr::group_by(lambda) |>
+  dplyr::mutate(Turnover_bc = ifelse(lambda == 0,
+                                     log(Turnover),
+                                     fabletools::box_cox(Turnover, lambda))) |>
+  dplyr::ungroup()
+
+ggplot(food_long, aes(Month, Turnover_bc, color = factor(lambda))) +
+  geom_line() +
+  labs(title = "Box–Cox 변환 비교(일부 λ)",
+       y = "변환된 Turnover", color = "λ") +
+  theme(legend.position = "bottom")
+
+```
+
+# 시계열 구성요소 
+
+## 개요
+
+-   시계열은 보통 다음 **세 가지 구성요소**로 분해하여 해석한다.
+    1)  **추세-순환(Trend-cycle,** $T_t$): 장기적 상승/하락 및 경기적
+        순환\
+    2)  **계절성(Seasonality,** $S_t$): 일정 주기마다 반복되는 패턴\
+    3)  **잔차(Remainder,** $R_t$): 위 두 요소를 제외한 불규칙
+        변동(오차)
+
+
+## 가법(additive) vs 승법(multiplicative) 구조
+
+-   **가법 모형**: 수준(level)과 무관하게 변동폭이 거의 일정할 때 적합\
+    $$
+    y_t = T_t + S_t + R_t
+    $$
+-   **승법 모형**: 수준이 높을수록 변동폭(계절·잡음)이 커질 때 적합\
+    $$
+    y_t = T_t \times S_t \times R_t
+    $$
+
+**선택 기준 요약**
+
+-   **가법**: 계절 변동 폭이 수준(level)에 따라 크게 변하지 않을 때
+-   **승법**: 시계열의 수준이 높을수록 계절 변동 폭도 커질 때 (예: 경제
+    시계열)
+
+
+
+## 로그 변환과의 관계
+
+-   승법 구조에 **로그 변환**을 적용하면 가법 구조로 변환된다. $$
+    \log y_t \;=\; \log T_t \;+\; \log S_t \;+\; \log R_t
+    $$
+-   실무 팁: 승법이 의심되면 **로그 변환 후 가법 분해**를 시도\
+    (분산 안정화, 해석 용이성 증가)
+
+
+
+## 계절 조정
+
+-   **정의**: 시계열에서 **계절 성분** $S_t$ 을 제거한 것
+    -   가법: $$
+        y_t^{(sa)} = y_t - S_t
+        $$
+    -   승법: $$
+        y_t^{(sa)} = \frac{y_t}{S_t}
+        $$
+-   **해석**: $y_t^{(sa)}$는 대체로 **추세-순환 + 잔차**만 남음\
+    → 경기 동향 파악, 전환점(턴포인트) 탐지에 유용\
+    → 단, **매끄러운 흐름**을 보려면 계절조정 값 자체보다 $T_t$
+    (추세-순환) 활용이 더 적절
+
+
+
+## 구성요소별 특징과 해석
+
+-   $T_t$ (추세-순환): 장기 흐름과 경기 순환의 결합.
+    -   장기 성장/하락, 전환점, 국면(확장/수축)을 해석할 때 핵심
+-   $S_t$ (계절성): 주기적 반복.
+    -   월·분기 효과, 요일/명절 효과 등\
+    -   시간 경과에 따라 **계절 패턴이 완만히 변형**될 수 있음
+-   $R_t$ (잔차): 설명 불가한 단기 변동·이상치 포함.
+    -   모형 적합성 진단(독립성, 분산, 정규성)에서 중요한 단서
+
+
+
+## 실무 팁
+
+-   **분해 구조 선택**:
+    -   레벨에 따라 계절 진폭이 달라지면 승법 또는 **로그+가법**\
+    -   그렇지 않으면 가법
+-   **변환 전후 비교**:
+    -   변환(로그/Box–Cox) 적용 전후로 **계절 진폭·잔차 분산**이
+        안정되는지 확인
+-   **계절 조정 vs 추세-순환**:
+    -   단기 비교(환경·정책 영향 등)는 계절조정 값 유용\
+    -   경기 국면/전환점 분석은 $T_t$ 활용
+-   **보고/커뮤니케이션**:
+    -   원시계열과 함께 **분해 결과(추세·계절·잔차, 계절조정)** 를
+        병기하면 해석 투명성↑
+
+
+
+# 이동평균 (Moving Averages)
+
+## 개요
+
+-   고전적 시계열 분해 방식은 1920년대부터 시작되어 1950년대까지 널리
+    쓰였다.\
+-   이 방식의 첫 단계는 **이동평균(moving average)** 을 사용하여
+    추세-순환(trend-cycle)을 추정하는 것이다.
+
+## 호주의 수출 데이터 예제 
+
+```{r aussie_export_data, fig.width=7, fig.height=3.8, out.width='100%'}
+global_economy |>
+  filter(Country == "Australia") |>
+  autoplot(Exports) +
+  labs(y = "% of GDP", title = "Total Australian exports")
+```
+
+
+
+## 이동평균 평활
+
+-   **m차 이동평균 (m-MA)** 은 다음과 같이 정의된다:\
+    $$
+    \hat{T}_t = \frac{1}{m} \sum_{j=-k}^{k} y_{t+j}
+    \quad \text{여기서 } m = 2k+1
+    $$ 즉, 시점 $t$ 주변 $k$ 기간 전후를 포함한 $m$개의 값을 평균 내어\
+    추세-순환 값을 추정한다.
+
+-   이 방법은 **근접한 시점의 관측값들이 비슷할 것**이라는 가정하에\
+    단기 잡음을 제거하고 부드러운 흐름을 확보할 수 있다.
+
+-   예시: 호주의 수출(% GDP) 시계열에 **5-MA** 를 적용하면\
+    양 끝 두 시점은 계산 불가 (주변값 부족) → **중앙 중심의 평균만
+    가능**
+
+-   **평활 정도**는 $m$의 크기에 따라 달라지며, $m$이 클수록 더 매끄러운
+    곡선이 된다.
+
+## 이동평균 평활
+```{r aussie_export_5ma, eval=FALSE}
+aus_exports <- global_economy |>
+  filter(Country == "Australia") |>
+  mutate(
+    `5-MA` = slider::slide_dbl(Exports, mean,
+                .before = 2, .after = 2, .complete = TRUE)
+  )
+aus_exports |>
+  autoplot(Exports) +
+  geom_line(aes(y = `5-MA`), colour = "#D55E00") +
+  labs(y = "% of GDP",
+       title = "Total Australian exports")
+```
+
+## 이동평균 평활
+```{r aussie_export_5ma2, echo=FALSE, fig.width=7, fig.height=3.8, out.width='100%'}
+aus_exports <- global_economy |>
+  filter(Country == "Australia") |>
+  mutate(
+    `5-MA` = slider::slide_dbl(Exports, mean,
+                .before = 2, .after = 2, .complete = TRUE)
+  )
+aus_exports |>
+  autoplot(Exports) +
+  geom_line(aes(y = `5-MA`), colour = "#D55E00") +
+  labs(y = "% of GDP",
+       title = "Total Australian exports")
+```
+
+
+## 이동평균의 복합 적용 
+
+-   **짝수 차수(m even)** 이동평균은 대칭성이 깨지기 쉬우므로,\
+    짝수 차수 이동평균 뒤에 또 다른 이동평균을 적용하여 **중앙
+    대칭성**을 복원할 수 있다.
+
+-   예:
+    -   4-MA를 먼저 적용하고,\
+    -   그 결과에 2-MA를 적용 → “2×4-MA (centred 4-MA)”\
+    -   이 조합은 **가중치 이동평균** 형태를 띈다.
+
+-   예시 공식 (예: 2×4-MA):\
+    $$
+    \hat{T}_t = \frac{1}{8} y_{t-2} + \frac{1}{4} y_{t-1} + \frac{1}{4} y_t + \frac{1}{4} y_{t+1} + \frac{1}{8} y_{t+2}
+    $$
+
+-   일반적으로 **홀수 차수 MA** 뒤에 또 홀수 차수 MA,\
+    짝수 차수 MA 뒤에 또 짝수 차수 MA를 적용하는 방식이 자주 쓰인다.
+
+## 이동평균의 복합 적용 
+```{r ma_of_ma_beer_aussie, cache=TRUE, echo=TRUE}
+beer <- aus_production |>
+  filter(year(Quarter) >= 1992) |>
+  select(Quarter, Beer)
+beer_ma <- beer |>
+  mutate(
+    `4-MA` = slider::slide_dbl(Beer, mean,
+                .before = 1, .after = 2, .complete = TRUE),
+    `2x4-MA` = slider::slide_dbl(`4-MA`, mean,
+                .before = 1, .after = 0, .complete = TRUE)
+  )
+beer_ma
+```
+
+
+
+## 계절 자료에서 추세-순환 추정
+
+-   계절성을 가진 시계열에서는 **centred 이동평균** (예: 2×m-MA) 이 계절
+    효과를 제거할 수 있는 좋은 선택이 된다.
+
+-   예:
+
+    -   월별 자료에 연간 계절성 있을 경우 → 2×12-MA 적용\
+    -   일별 자료에 주간 계절성 있을 경우 → 7-MA 적용
+
+-   규칙:
+
+    -   계절 주기가 짝수이면 → 2×m-MA\
+    -   계절 주기가 홀수이면 → m-MA\
+        이렇게 하면 추세-순환만 남고 계절 효과는 거의 제거된다.
+
+## 예: 미국 소매업 고용에의 적용
+
+-   미국 소매업 고용 시계열에 **12-MA**를 적용하고,\
+    그 뒤에 또 **2×12-MA**를 적용하여 중심 이동평균을 만든다.
+
+-   결과: 계절성이 제거된 **매끄러운 추세-순환 곡선**을 얻을 수 있다.\
+    이 곡선은 더 정교한 추정 방법으로 얻은 추세-순환과 매우 유사하다.
+
+```{r us_retail_sales_ma_trend}
+us_retail_employment_ma <- us_retail_employment |>
+  mutate(
+    `12-MA` = slider::slide_dbl(Employed, mean,
+                .before = 5, .after = 6, .complete = TRUE),
+    `2x12-MA` = slider::slide_dbl(`12-MA`, mean,
+                .before = 1, .after = 0, .complete = TRUE)
+  )
+us_retail_employment_ma |>
+  autoplot(Employed, colour = "gray") +
+  geom_line(aes(y = `2x12-MA`), colour = "#D55E00") +
+  labs(y = "Persons (thousands)",
+       title = "Total employment in US retail")
+```
+
+## 예: 미국 소매업 고용에의 적용
+```{r us_retail_sales_ma_trend2, echo=FALSE, fig.width=7, fig.height=3.8, out.width='100%'}
+us_retail_employment_ma <- us_retail_employment |>
+  mutate(
+    `12-MA` = slider::slide_dbl(Employed, mean,
+                .before = 5, .after = 6, .complete = TRUE),
+    `2x12-MA` = slider::slide_dbl(`12-MA`, mean,
+                .before = 1, .after = 0, .complete = TRUE)
+  )
+us_retail_employment_ma |>
+  autoplot(Employed, colour = "gray") +
+  geom_line(aes(y = `2x12-MA`), colour = "#D55E00") +
+  labs(y = "Persons (thousands)",
+       title = "Total employment in US retail")
+```
+
+
+## 가중 이동평균 (Weighted Moving Averages)
+
+-   복합 이동평균은 **가중치 형태의 이동평균**으로 해석할 수 있다:\
+    $$
+    \hat{T}_t = \sum_{j=-k}^{k} a_j \, y_{t+j}, \quad \sum a_j = 1, \; a_{j} = a_{-j}
+    $$
+
+-   단순 $m$-MA는 모든 $a_j = 1/m$ 인 특수한 경우이다.
+
+-   가중치 MA의 장점:
+
+    -   점진적으로 가중치를 부여 → 갑자기 자료가 빠져나가거나 새로
+        들어오는 변화 완화\
+    -   더 부드러운 추세곡선 산출 가능
+
+
+
+## 요약 정리
+
+-   이동평균은 시계열의 잡음을 제거하고 부드러운 추세-순환 흐름을 제공\
+-   홀수 차수 MA는 대칭성이 자연스럽지만, 짝수 차수 MA는 대칭성을 위해
+    복합 MA가 필요\
+-   계절성이 있는 자료에서는 centred MA (예: 2×m-MA) 가 효과적\
+-   복합 MA는 가중 이동평균으로 해석 가능하며, 부드러운 곡선 산출에
+    유리하다
+
+
+
+# 고전적 분해법 (Classical Decomposition)
+
+## 개요
+
+-   고전적 분해법은 1920년대에 시작된 비교적 간단한 분해 절차\
+-   시간 주기 $m$ (예: 분기 $m=4$, 월별 $m=12$, 주간 $m=7$)을 기준으로
+    -   **가법 분해(additive decomposition)**\
+    -   **승법 분해(multiplicative decomposition)**\
+        두 형태로 나뉜다\
+-   가정: 계절성 구성요소가 매년 동일하게 반복됨 (변화 없음)\
+    승법 분해의 경우 계절 지수(seasonal indices)라는 표현도 사용됨
+
+
+
+## 가법 분해 (Additive Decomposition)
+
+1.  **추세-순환(Trend-cycle) 추정** $\hat{T}_t$
+
+    -   $m$이 짝수이면 → $2 \times m$ 중심 이동평균 사용\
+    -   $m$이 홀수이면 → $m$-차 이동평균 사용
+
+2.  **분산 제거 (detrending)**\
+    $$
+    y_t - \hat{T}_t
+    $$
+
+3.  **계절성 구성요소** $\hat{S}_t$ 추정
+
+    -   특정 계절(예: 3월)에 속한 모든 $y_t - \hat{T}_t$ 값들의 평균\
+    -   그 값을 모두 연결하고, 매년 반복하도록 확장\
+    -   계절성 값들의 합이 0이 되도록 보정
+
+## 가법 분해 (Additive Decomposition)
+
+4.  **잔차 구성요소** $\hat{R}_t$ 계산\
+    $$
+    \hat{R}_t = y_t - \hat{T}_t - \hat{S}_t
+    $$
+
+```{r add_decompse_us_retail, eval=FALSE}
+us_retail_employment |>
+  model(
+    classical_decomposition(Employed, type = "additive")
+  ) |>
+  components() |>
+  autoplot() +
+  labs(title = "Classical additive decomposition of total
+                  US retail employment")
+```
+
+## 가법 분해 (Additive Decomposition)
+
+```{r add_decompse_us_retail2, echo=FALSE, fig.width=7, fig.height=3.8, out.width='100%'}
+us_retail_employment |>
+  model(
+    classical_decomposition(Employed, type = "additive")
+  ) |>
+  components() |>
+  autoplot() +
+  labs(title = "Classical additive decomposition of total
+                  US retail employment")
+```
+
+
+## 승법 분해 (Multiplicative Decomposition)
+
+-   방식은 가법 분해와 유사하나, **빼기 대신 나누기**를 사용\
+
+-   절차:
+
+    1.  추세-순환 $\hat{T}_t$ 추정 (짝수 $m$이면 $2m$-MA, 홀수이면
+        $m$-MA)
+    2.  분산 제거 (detrending):\
+        $$
+        \frac{y_t}{\hat{T}_t}
+        $$
+    3.  계절 지수 $\hat{S}_t$ 추정
+        -   특정 계절의 모든 $y_t / \hat{T}_t$ 값 평균\
+        -   계절 지수들이 모여 연간 반복 패턴을 구성\
+        -   지수들의 합이 $m$ 이 되도록 보정\
+
+## 승법 분해 (Multiplicative Decomposition)
+-   절차: 4.  잔차 구성요소 $\hat{R}_t$ 계산:\
+        $$
+        \hat{R}_t = \frac{y_t}{\hat{T}_t \, \hat{S}_t}
+        $$
+
+
+## 고전적 분해법의 제약 및 단점
+
+-   **초기 및 말단 관측값에 대한** $\hat{T}_t$ 추정 불가\
+    → 예: $m=12$이면 처음 6개, 마지막 6개 관측치는 추세-순환과 잔차를
+    계산할 수 없음
+
+-   **급격한 상승/하락을 과도하게 평활화(over-smoothing)** 하는 경향\
+    → 변동이 빠른 구간을 정확히 반영하기 어려움
+
+-   **계절성의 변화 반영 불가능**\
+    → 계절 패턴이 시간이 흐르며 변화하는 경우 (예: 전기 수요 패턴 변화)
+    잘 반영하지 못함
+
+-   **이상치(outlier)에 취약**\
+    → 특정 기간에 극단치가 있으면 분해 왜곡 가능
+
+
+
+# 통계기관에서 사용하는 방법
+
+
+## 개요
+
+-   미국 인구조사국(US Census Bureau), 한국 통계청 등 공공 통계기관은
+    많은 경제·사회 시계열을 계절 조정하기 위해 자체적인 **분해
+    방법** 을 개발해 사용한다.
+-   이들 기관은 주로 **X-11 방법** 또는 **SEATS 방법**, 또는 이 둘의
+    조합을 변형한 방식을 사용한다.
+-   이 방법들은 **월별·분기별 시계열**을 위해 설계되었으며,
+    일별, 시(時)별, 주(週)별 계절성 추정에는 적용되지 않는 경우가 많다.
+-   R에서 이들 방법을 사용하려면 `seasonal` 패키지가 필요하다.
+
+
+
+## X-11 방법
+
+-   X-11은 미국 인구조사국에서 시작되었고, 이후 캐나다 통계청에서도
+    발전되고, 현재 한국은행 및 통계청에도 이를 계량한 방법이 사용되고
+    있음
+-   고전 분해법(classical decomposition)에 여러 보완 단계와 기능을
+    추가한 방식이다.
+-   주요 특징:
+    -   추세-순환(trend-cycle) 추정치를 **말단 관측치까지 모두 구함**\
+    -   계절성 구성요소가 **시간에 따라 서서히 변하도록 허용**\
+    -   영업일 수 변동(trading-day effect), 휴일 효과(holiday effects),
+        알려진 예측 변수 효과 처리 가능\
+    -   **가법/승법 모두 가능**\
+    -   자동 처리 기능이 강하고, 이상치(outliers)나 수준 변화(level
+        shifts)에 강건한 편
+
+## X-11 방법 예제
+
+```{r xelev_example, eval=FALSE}
+x11_dcmp <- us_retail_employment |>
+  model(x11 = X_13ARIMA_SEATS(Employed ~ x11())) |>
+  components()
+autoplot(x11_dcmp) +
+  labs(title =
+    "Decomposition of total US retail employment using X-11")
+```
+
+## X-11 방법 예제
+
+```{r xelev_decompose, eval=FALSE}
+x11_dcmp |>
+  ggplot(aes(x = Month)) +
+  geom_line(aes(y = Employed, colour = "Data")) +
+  geom_line(aes(y = season_adjust,
+                colour = "Seasonally Adjusted")) +
+  geom_line(aes(y = trend, colour = "Trend")) +
+  labs(y = "Persons (thousands)",
+       title = "Total employment in US retail") +
+  scale_colour_manual(
+    values = c("gray", "#0072B2", "#D55E00"),
+    breaks = c("Data", "Seasonally Adjusted", "Trend")
+  )
+```
+
+```{r xelev_decompose_fig, eval=FALSE}
+x11_dcmp |>
+ gg_subseries(seasonal)
+```
+
+## SEATS
+
+-   SEATS는 “Seasonal Extraction in ARIMA Time Series”의 약자이며,
+    스페인 중앙은행(Bank of Spain)에서 개발됨
+-   ARIMA 모형을 기반으로 계절성·추세를 분리하는 방식
+-   `X_13ARIMA_SEATS()` 함수는 X-11과 SEATS를 다양한 옵션과 조합으로
+    다룰 수 있도록 구현됨
+
+```{r seats_ex, eval=FALSE}
+seats_dcmp <- us_retail_employment |>
+  model(seats = X_13ARIMA_SEATS(Employed ~ seats())) |>
+  components()
+autoplot(seats_dcmp) +
+  labs(title =
+    "Decomposition of total US retail employment using SEATS")
+```
+
+# STL 분해 (STL Decomposition)
+
+## 개요
+
+-   **STL** = *Seasonal and Trend decomposition using Loess*
+    -   Loess는 비선형 관계를 매끄럽게 추정하는 기법\
+    -   Cleveland 등(1990) 제안, 이후 복수 계절성 확장됨
+-   STL의 장점:
+    -   월별/분기별 뿐 아니라 **모든 형태의 계절성** 처리 가능
+    -   계절성 성분이 **시간에 따라 변화**하도록 허용\
+    -   추세-순환 정도(smoothness) 조정 가능\
+    -   이상치(outlier)에 대한 **로버스트(강건) 분해** 옵션 제공
+-   단점:
+    -   달력 효과(trading day), 휴일 효과(calendar variation)를 자동
+        처리하지 않음
+    -   기본적으로 **가법 분해**만 제공
+        -   승법 분해는 로그 변환 후 역변환 또는 Box–Cox 변환을 통해
+            구현 가능
+
+## STL 분해 적용 및 파라미터 선택
+
+-   주된 조정 변수 두 가지:
+    1.  **trend(window = ?)**: 추세-순환 성분의 유연성 제어\
+    2.  **season(window = ?)**: 계절 성분의 변화 허용 정도 조절
+-   **파라미터 제약/관례**:
+    -   trend, season 모두 **홀수 값** 사용\
+    -   season(window = "periodic") 설정하면 **고정된 계절성** 강제\
+    -   기본 설정 예 (단일 계절성):
+        -   season window = 11\
+        -   월별 데이터의 경우 trend window 기본값 = 21
+-   자동 설정은 일반적으로 합리적 균형을 제공하나,\
+    특정 시계열에서는 조정이 필요할 수 있음\
+    → 예: 기본 trend window가 너무 강직하여 이상 신호가 잔차에 일부
+    포함되는 경우
+
+
