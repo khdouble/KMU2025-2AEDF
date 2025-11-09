@@ -1,0 +1,1004 @@
+---
+title: "경제자료분석과 예측 - #06 ARIMA 모형 (1)"
+author: "경제학과 김현학 교수"
+date: "2025년 2학기"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+# ---- 전역 옵션 ----
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width=7, fig.height=3.6, cache=FALSE, dev='png', dpi=150)
+
+# 프로젝트 루트 기준 경로 고정
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+# --------------------------------
+
+suppressPackageStartupMessages({
+  library(tsibble); library(fabletools); library(fable); library(feasts); library(rprojroot) # rprojroot 추가
+  library(dplyr); library(ggplot2); library(lubridate); library(tsibbledata)
+  library(tidyr); library(knitr);library(fpp3);library(seasonal);library(x13binary);library(purrr); library(transformer); library(gganimate)
+})
+```
+
+# 행렬 기초 복습 
+
+## 다중회귀분석 모형
+- 다중선형 회귀모형은 다음과 같이 표현할 수 있다:
+
+\[
+y_t = \beta_0 + \beta_1 x_{1,t} + \beta_2 x_{2,t} + \cdots + \beta_k x_{k,t} + \varepsilon_t
+\]
+
+ - 여기서 \(\varepsilon_t\)는 평균 0, 분산 \(\sigma^2\)를 가진다.  
+ - 이 식은 단일 시점의 관계를 나타낸다.  
+
+## 행렬 표현으로의 전환
+
+모든 관측값을 한꺼번에 표현하기 위해 다음과 같이 정의하자:
+
+\[
+\mathbf y = (y_1,\,\dots,y_T)'\quad \mathbf\varepsilon = (\varepsilon_1,\,\dots,\varepsilon_T)'
+\]
+\[
+\boldsymbol\beta = (\beta_0,\beta_1,\dots,\beta_k)'
+\]
+\[
+\mathbf X = \begin{bmatrix}
+1 & x_{1,1} & x_{2,1} & \dots & x_{k,1} \\
+1 & x_{1,2} & x_{2,2} & \dots & x_{k,2} \\
+\vdots & \vdots & \vdots & & \vdots \\
+1 & x_{1,T} & x_{2,T} & \dots & x_{k,T}
+\end{bmatrix}
+\]
+
+그 결과 회귀식은 다음과 같이 표현된다:
+
+\[
+\mathbf y = \mathbf X\, \boldsymbol\beta + \mathbf\varepsilon
+\]
+
+## 최소제곱 추정 (Least Squares Estimation)
+
+최소제곱방법은 다음을 최소화하는 \(\boldsymbol\beta\)를 찾는다:
+
+\[
+\boldsymbol\varepsilon'\boldsymbol\varepsilon = (\mathbf y - \mathbf X\,\boldsymbol\beta)'(\mathbf y - \mathbf X\,\boldsymbol\beta)
+\]
+
+그 결과 다음과 같은 해가 얻어진다:
+
+\[
+\hat{\boldsymbol\beta} = (\mathbf X'\mathbf X)^{-1}\mathbf X'\mathbf y
+\]
+
+## 추정불가능성 및 랭크 조건
+
+- 만약 \(\mathbf X\)가 **풀 컬럼 랭크(full column rank)** 가 아니라면,  
+  \(\mathbf X'\mathbf X\)가 특이(singular)행렬이 되어 모형을 추정할 수 없다.  
+- 예컨대, 범주형 변수에서 더미변수를 **카테고리 수만큼** 생성하고 절편까지 포함했을 때 발생하는 “더미변수 함정(dummy-variable trap)”이 그 예다 
+
+## 적합값 및 교차검증(Cross Validation: CV)
+
+- 적합값은 다음과 같이 표현된다:
+
+\[
+\hat{\mathbf y} = \mathbf X\,\hat{\boldsymbol\beta} 
+= \mathbf X(\mathbf X' \mathbf X)^{-1}\mathbf X' \mathbf y 
+= \mathbf H\,\mathbf y
+\]
+
+여기서 \(\mathbf H = \mathbf X(\mathbf X'\mathbf X)^{-1}\mathbf X'\)를 **모자행렬(hat-matrix)** 라고 부른다.  
+- 모자행렬의 대각성분을 \(h_1,\dots,h_T\)라 하면 교차검증(CV) 통계량은 다음과 같이 계산할 수 있다:
+
+\[
+\text{CV} = \frac1T \sum_{t=1}^T \left[ \frac{e_t}{1 - h_t} \right]^2
+\]
+
+여기서 \(e_t\)는 전체 자료 \(T\)로 적합한 모형의 잔차이다.  
+→ 즉, \(T\)개의 별도 모형을 적합하지 않아도 CV를 구할 수 있다.
+
+## 예측 및 예측구간 
+
+- 새로운 예측변수 값 \(\mathbf x^*\)에 대해 예측값은:
+
+\[
+\hat y = \mathbf x^*\hat{\boldsymbol\beta}
+= \mathbf x^*(\mathbf X' \mathbf X)^{-1}\mathbf X'\mathbf y
+\]
+
+- 예측분산(추정)은 다음과 같이 주어진다:
+
+\[
+\hat\sigma_e^2 \left[1 + \mathbf x^*(\mathbf X' \mathbf X)^{-1}(\mathbf x^*)' \right]
+\]
+
+- 95% 예측구간은 다음과 같이 계산할 수 있다:
+
+\[
+\hat y \pm 1.96\,\hat\sigma_e \sqrt{1 + \mathbf x^*(\mathbf X' \mathbf X)^{-1}(\mathbf x^*)'}
+\]
+
+단, 예측변수의 미래값 \(\mathbf x^*\) 자체의 오차는 고려하지 않는다.  
+따라서 그 오차가 크다면 이 예측구간은 과도하게 **좁게** 나올 수 있다.
+
+# ARIMA 모형
+
+## ARIMA 모형 소개
+
+- **ARIMA 모형(Autoregressive Integrated Moving Average models)** 은 시계열 예측(time series forecasting)을 위한 또 다른 대표적 방법이다.
+
+- **지수평활법(Exponential Smoothing)** 과 **ARIMA 모형**은  
+  시계열 예측에서 가장 널리 사용되는 두 가지 접근법이다.  
+- 두 방법은 서로 **보완적인(complementary)** 관계에 있다.
+
+
+## 두 접근법의 차이점
+
+| 접근법 | 주요 개념 |
+|:--------|:-----------|
+| **지수평활법** | 데이터 내의 **추세(trend)** 와 **계절성(seasonality)** 의 구조를 명시적으로 모델링 |
+| **ARIMA 모형** | 데이터 내의 **자기상관(autocorrelation)** 구조를 설명하고자 함 |
+
+
+즉,  
+- 지수평활법은 시계열의 형태를 직접 기술하는 데 초점을 맞추고,  
+- ARIMA 모형은 시계열 값들 간의 상관관계를 수학적으로 설명한다.
+
+
+## ARIMA 모형 도입을 위한 준비
+
+ARIMA 모형을 소개하기에 앞서, 두 가지 핵심 개념을 먼저 다루어야 한다.
+
+1. **정상성(Stationarity)** — 시계열의 통계적 성질이 시간에 따라 변하지 않는 특성  
+2. **차분(Differencing)** — 비정상 시계열을 정상 시계열로 변환하는 기법  
+
+이 두 개념은 ARIMA 모형의 토대를 이루며, 다음 절에서 구체적으로 살펴볼 것이다.
+
+# 정상성 (Stationarity)
+
+## 정상 시계열이란?
+
+**정상 시계열(stationary time series)** 이란 그 통계적 특성이 **관측 시점에 의존하지 않는 시계열**을 말한다.
+
+즉,  
+- **추세(trend)** 가 있거나  
+- **계절성(seasonality)** 을 가진 시계열은 시간에 따라 평균이나 분산이 변하므로 **비정상(non-stationary)** 이다.
+
+- 반면, **백색잡음(white noise)** 시계열은 언제 관측하더라도 통계적 특성이 동일하다.  
+ - 따라서 백색잡음은 **정상 시계열**이다.
+
+## 주기성과 정상성의 혼동
+
+다음과 같은 경우는 다소 헷갈릴 수 있다.
+
+- **주기적(cyclic)** 거동을 보이지만, 추세나 계절성이 없는 시계열은 **정상(stationary)** 이다.  
+- 이는 주기의 길이가 일정하지 않기 때문에, 실제 관측 전에 어디에서 최고점과 최저점이 나타날지 예측할 수 없기 때문이다.
+
+즉, **주기(cycle)** 는 존재하더라도, 그 패턴이 일정하지 않다면 정상 시계열로 간주할 수 있다.
+
+## 정상 시계열의 일반적 특징
+
+일반적으로 정상 시계열은 장기적으로 **예측 가능한 패턴이 존재하지 않는다.**
+
+- 시계열 그래프(time plot)는 대체로 **수평(horizontally flat)** 하며,  
+- 일정한 **분산(constant variance)** 을 보인다.  
+- 일부 주기적 변동이 있을 수 있으나, 추세나 계절적 구조는 없다.
+
+## 예시: 어떤 시계열이 정상일까?
+
+```{r acf_images, echo=FALSE, fig.show='hold', out.width='90%'}
+knitr::include_graphics("stationary.png")
+```
+
+## 예시: 어떤 시계열이 정상일까?
+
+그림의 아홉 개 시계열을 살펴보자. 이 중 어느 것이 정상일까?
+
+- 뚜렷한 계절성이 있는 (d), (h), (i)는 **비정상**  
+- 추세나 수준(level)의 변화가 있는 (a), (c), (e), (f), (i)는 **비정상**  
+- 분산이 증가하는 (i) 역시 **비정상**
+
+따라서 남는 것은 **(b)** 와 **(g)**, 두 개의 시계열이다. 이들이 **정상 시계열**이다.
+
+## (g) 시계열의 주기성과 정상성
+
+처음 보면 (g)의 강한 주기성(cyclic pattern)은 비정상처럼 보일 수 있다.  그러나 이 주기는 **비주기적(aperiodic)** 이다.
+
+예를 들어,  
+- 스라소니(lynx) 개체 수가 먹이 부족으로 감소하면 번식이 줄고,  
+- 먹이원이 회복되면 다시 개체 수가 증가하는 식이다.  
+- 하지만 이러한 사이클의 시점은 매번 달라 예측할 수 없다.
+
+결국, 장기적으로 보면 주기의 시점이 불규칙하므로 (g) 시계열은 **정상(stationary)** 이다.
+
+# 차분 (Differencing)
+
+## 비정상 → 정상으로 만드는 방법
+
+- **그림**의 (a) 패널에서 구글(Google) 주가는 **비정상(non-stationary)** 이었다.  
+- 그러나 (b) 패널에서 나타난 **일일 변화율(daily changes)** 은 **정상(stationary)** 하다.
+
+즉,  
+- 연속된 관측값의 차이를 계산하면 비정상 시계열을 정상 시계열로 변환할 수 있다.  
+- 이 과정을 **차분(differencing)** 이라고 한다.
+
+## 변환과 차분의 역할
+
+- **로그 변환(logarithm)** : 분산(variance)을 안정화(stabilize)  
+- **차분(differencing)** : 시계열의 평균(mean)을 안정화하여 **수준 변화(level shift)** 나 **추세(trend)** 를 제거함
+
+이를 통해 비정상성을 완화하거나 제거할 수 있다.
+
+## ACF를 통한 정상성 진단
+
+데이터의 시계열 그래프 외에도,  
+**자기상관함수(ACF) 그래프**는 정상성 여부를 판별하는 데 유용하다.
+
+- **정상 시계열**: ACF 값이 빠르게 0으로 수렴  
+- **비정상 시계열**: ACF 값이 천천히 감소  
+- 특히, 비정상 데이터에서는 \(r_1\) (1시차 자기상관)이 **크고 양(+)의 값**인 경우가 많다.
+
+## ACF를 통한 정상성 진단 (구글 데이터)
+```{r, message=FALSE, warning=FALSE}
+google_2018 <- gafa_stock |>
+  filter(Symbol == "GOOG", year(Date) == 2018)
+```
+
+## ACF를 통한 정상성 진단 (구글 데이터)
+```{r, message=FALSE, warning=FALSE, echo=FALSE,out.width='100%'}
+google_2018 |> ACF(Close) |>
+  autoplot() + labs(subtitle = "Google closing stock price")
+```
+
+## ACF를 통한 정상성 진단 (구글 데이터)
+```{r, message=FALSE, warning=FALSE, echo=FALSE,out.width='100%'}
+google_2018 |> ACF(difference(Close)) |>
+  autoplot() + labs(subtitle = "Changes in Google closing stock price")
+```
+
+## 예시: 구글 주가의 차분 후 ACF
+
+차분된 구글 주가 시계열의 ACF는 **백색잡음(white noise)** 과 매우 유사하다.
+
+- 95% 신뢰구간을 벗어난 자기상관은 단 하나뿐이며,  
+- **Ljung-Box Q\*** 통계량의 p-값은 **0.637 (h=10)** 이다.
+ - 시계열 모형의 잔차(residuals) 또는 데이터 자체가 “백색잡음(white noise)”인지 — 즉, 자기상관(autocorrelation) 이 존재하지 않는지를 검정하는 통계량
+
+이는 구글 주가의 일일 변화가 이전 일들의 변화와 **상관이 없는(random and uncorrelated)** 무작위적 변동임을 시사한다.
+
+# 랜덤워크 모형 (Random Walk Model)
+
+## 차분(differencing)의 의미
+
+차분된 시계열은 원래 시계열의 연속된 관측값 간의 차이를 의미하며, 다음과 같이 정의된다.
+
+\[
+y'_t = y_t - y_{t-1}
+\]
+
+차분된 시계열은 첫 번째 관측값에 대한 차이를 계산할 수 없으므로 총 \(T - 1\)개의 값만 갖는다.
+
+## 백색잡음이 되는 경우
+
+만약 차분된 시계열이 **백색잡음(white noise)** 이라면, 원래 시계열의 모형은 다음과 같이 표현할 수 있다.
+
+\[
+y_t - y_{t-1} = \varepsilon_t,
+\]
+
+이를 정리하면 **랜덤워크(random walk)** 모형이 된다.
+
+\[
+y_t = y_{t-1} + \varepsilon_t,
+\]
+
+여기서 \(\varepsilon_t\)는 평균 0, 분산 \(\sigma^2\)의 백색잡음을 의미한다.
+
+## 랜덤워크의 특징
+
+랜덤워크 모형은 **비정상 시계열(non-stationary data)**, 특히 **금융 및 경제 데이터**에서 매우 널리 사용된다.
+
+- 장기간 상승 또는 하락하는 **겉보기 추세(apparent trend)** 를 가짐  
+- 방향이 갑자기 바뀌는 **예측 불가능한 변동성(unpredictable changes)** 존재  
+
+이 모형에서의 예측치는 항상 마지막 관측값과 동일하다.
+
+\[
+\hat{y}_{T+h|T} = y_T
+\]
+
+즉, 미래 변동이 상·하방으로 동일한 확률로 발생한다고 가정하기 때문에  이 모형은 **단순 나이브 예측(naïve forecast)** 의 기초가 된다.
+
+## 랜덤워크 + 드리프트(Random Walk with Drift)
+
+경우에 따라, 차분의 평균이 0이 아닌 경우가 있다. 이를 고려하면 다음과 같은 확장 모형이 된다.
+
+\[
+y_t - y_{t-1} = c + \varepsilon_t,
+\quad \text{또는} \quad
+y_t = c + y_{t-1} + \varepsilon_t
+\]
+
+여기서 \(c\)는 연속된 관측값 사이의 **평균 변화량(mean change)** 이다.
+
+- \(c > 0\): 시계열이 **상승 추세(drift upwards)** 를 가짐  
+- \(c < 0\): 시계열이 **하락 추세(drift downwards)** 를 가짐
+
+이 모형은 **드리프트 방법(drift method)** 의 기초이며, DL는 앞에서 소개된 바 있다.
+
+# 2차 차분 (Second-order Differencing)
+
+## 2차 차분의 정의
+
+가끔 1차 차분만으로는 시계열이 정상적으로 보이지 않을 수 있다.  
+이때 **2차 차분(second-order differencing)** 을 적용할 수 있다.
+
+\[
+y''_t = y'_t - y'_{t-1}
+       = (y_t - y_{t-1}) - (y_{t-1} - y_{t-2})
+       = y_t - 2y_{t-1} + y_{t-2}
+\]
+
+이 경우 \(y''_t\)는 \(T - 2\)개의 값을 가지며, 이는 원래 시계열의 “변화의 변화(change in changes)”를 모델링하는 것이다.
+
+## 2차 차분의 실무적 활용
+
+- 실제 분석에서는 **2차 차분을 넘는 경우는 거의 없다.**  
+- 대부분의 비정상 시계열은 1차 또는 2차 차분만으로 정상성을 확보할 수 있다.
+
+# 계절 차분 (Seasonal Differencing)
+
+## 계절 차분의 개념
+
+**계절 차분(seasonal differencing)** 은  같은 계절(또는 주기)에 해당하는 이전 관측값을 빼주는 과정이다.
+
+\[
+y'_t = y_t - y_{t-m}
+\]
+
+여기서 \(m\)은 **계절의 주기(length of the season)** 이다.  
+이 식은 “지연 차분(lag-m difference)”이라고도 부른다.
+
+## 계절 차분 모형의 해석
+
+계절 차분된 데이터가 백색잡음처럼 보인다면,  원래 시계열에 대한 적절한 모형은 다음과 같다.
+
+\[
+y_t = y_{t-m} + \varepsilon_t
+\]
+
+이때 예측치는 이전 계절의 마지막 관측값과 동일하다.
+
+즉, 이 모형은 **계절적 나이브 예측(seasonal naïve forecast)** 을 제공한다  
+
+## 예시: 호주 A10 약품 판매량
+
+다음 그림은 호주에서 판매된  **A10 (항당뇨제, antidiabetic)** 의  월별 판매량 로그값(log-transformed data)을 계절 차분한 결과이다.
+
+- 로그 변환과 계절 차분을 통해  시계열이 **상대적으로 정상적(stationary)** 으로 변했다.
+
+## 예시: 호주 A10 약품 판매량
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.width='75%'}
+include_graphics("a10diff.png")
+```
+
+## 일반 차분과 계절 차분의 구분
+
+계절 차분(seasonal differencing)과 구분하기 위해, 지연 1(lag 1)에서의 일반 차분(ordinary difference)을 **‘1차 차분(first difference)’** 라고 부르기도 한다.
+
+\[
+y'_t = y_t - y_{t-1}
+\]
+
+
+## 계절 차분과 1차 차분을 모두 사용하는 경우
+
+어떤 경우에는 **계절 차분**과 **1차 차분**을 모두 적용해야 데이터가 정상(stationary)으로 보일 수 있다.
+
+다음 그림은 호주의 코르티코스테로이드(Corticosteroid) 약품 판매액을 보여준다.
+
+- (상단 패널): 원자료 (판매액, \$AUD 기준)  
+- (2번째 패널): 로그 변환(Log transformation)  
+- (3번째 패널): 계절 차분(Seasonal difference, lag=12)  
+- (하단 패널): 추가적인 1차 차분(First difference)
+
+## 계절 차분과 1차 차분을 모두 사용하는 경우
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=5.5, fig.height=3.8}
+library(fpp3)
+library(tsibbledata)
+
+PBS |>
+  filter(ATC2 == "H02") |>
+  summarise(Cost = sum(Cost)/1e6) |>
+  transmute(
+    `Sales ($million)` = Cost,
+    `Log sales` = log(Cost),
+    `Annual change in log sales` = difference(log(Cost), 12),
+    `Doubly differenced log sales` =
+      difference(difference(log(Cost), 12), 1)
+  ) |>
+  pivot_longer(-Month, names_to="Type", values_to="Sales") |>
+  mutate(
+    Type = factor(Type, levels = c(
+      "Sales ($million)",
+      "Log sales",
+      "Annual change in log sales",
+      "Doubly differenced log sales"))
+  ) |>
+  ggplot(aes(x = Month, y = Sales)) +
+  geom_line() +
+  facet_grid(vars(Type), scales = "free_y") +
+  labs(title = "Corticosteroid drug sales (Australia)",
+       subtitle = "Raw, log, seasonal differencing, and double differencing",
+       y = NULL) +
+  theme_minimal()
+```
+
+## 차분의 개수와 순서
+
+차분의 개수와 순서는 **분석가의 판단**에 따라 달라질 수 있다.
+
+- **A10 약품 판매량** 데이터와 **코르티코스테로이드 판매량** 데이터는 계절 차분 후에도 유사한 패턴을 보인다.
+- 어떤 경우에는 **계절 차분까지만으로 충분**하고, 다른 경우에는 **1차 차분을 추가**해야 정상성을 얻을 수 있다.
+
+> 결국, 차분의 정도(differencing order)는 **일부 주관적 판단(subjective judgment)** 이 개입될 수밖에 없다.
+
+## 이중 차분의 일반식  
+
+### 수식 표현
+
+\[
+y'_t = y_t - y_{t-m} \quad \text{(계절 차분, Seasonal Difference)}
+\]
+
+\[
+y''_t = y'_t - y'_{t-1}
+\]
+
+\[
+\Rightarrow 
+y''_t = (y_t - y_{t-m}) - (y_{t-1} - y_{t-m-1}) \\
+= y_t - y_{t-1} - y_{t-m} + y_{t-m-1}
+\]
+
+## 차분의 순서와 효과 
+
+### 순서에 따른 영향
+
+- **계절 차분**과 **1차 차분**을 모두 적용할 경우  
+  → **적용 순서는 결과에 영향을 주지 않는다.**
+
+- 하지만 **계절성이 강한 데이터**의 경우, **계절 차분을 먼저 적용**하는 것이 일반적으로 권장된다.
+
+> 이유:  
+> - 계절 차분만으로도 정상성을 확보할 수 있는 경우가 많다.  
+> - 반대로, 1차 차분을 먼저 하면 계절성이 남을 가능성이 높다.
+
+## 과도한 차분에 대한 주의
+
+차분을 **필요 이상으로 많이 적용**하면, 실제로 존재하지 않는 **가짜 자기상관(false autocorrelation)** 을 인위적으로 만들어낼 수 있다.
+
+> ✅ 따라서,  
+> **정상성을 얻기 위한 최소한의 차분만 수행**하는 것이 바람직하다.
+
+## 차분의 해석 가능성
+
+### 차분의 의미와 해석
+
+차분을 사용할 때는 **그 의미가 해석 가능해야 한다.**
+
+| 차분 유형 | 해석 |
+|------------|------|
+| **1차 차분** | 바로 이전 시점 대비 변화량 |
+| **계절 차분** | 1년 전(또는 동일 계절) 대비 변화량 |
+| **기타 시차 차분** | 해석이 모호하므로 일반적으로 사용하지 않음 |
+
+> “변화의 의미가 명확한” 차분만 사용하는 것이 좋다.
+
+
+# 단위근 검정 (Unit Root Tests)
+
+##  단위근 검정의 목적
+
+시계열 데이터가 **정상(stationary)** 인지, 또는 **차분(differencing)** 이 필요한지를 보다 **객관적으로 판단**하기 위해 **단위근 검정(Unit root test)** 을 사용한다.
+
+단위근 검정은 정상성에 대한 통계적 가설 검정으로, 데이터에 **단위근(unit root)** 이 존재하는지를 판별한다.
+
+##  여러 가지 단위근 검정 중 KPSS 검정
+
+단위근 검정에는 다양한 방법이 있으나, 본 교재에서는 **KPSS 검정(Kwiatkowski–Phillips–Schmidt–Shin test)** 을 사용한다  
+(Kwiatkowski et al., 1992).
+
+- **귀무가설 \(H_0\)** : 데이터가 **정상(stationary)** 하다.  
+- **대립가설 \(H_1\)** : 데이터가 **비정상(non-stationary)** 하다.
+
+따라서,  
+- **p값이 작을수록 (예: < 0.05)** → 정상성 기각 → **차분 필요**  
+- **p값이 클수록 (예: > 0.05)** → 정상성 유지 → **차분 불필요**
+
+##  여러 가지 단위근 검정 중 KPSS 검정
+R에서는 `unitroot_kpss()` 함수로 계산한다.
+
+```{r, message=FALSE, warning=FALSE}
+library(fpp3)
+
+# KPSS 검정 (원시 데이터)
+google_2018 |>
+  features(Close, unitroot_kpss)
+```
+
+위의 결과에서 p값이 0.0252이므로, 귀무가설이 기각된다.
+→ 데이터는 비정상(non-stationary) 이다.
+→ 따라서 차분이 필요하다.
+
+## 1차 차분 후 KPSS 검정
+
+데이터를 1차 차분한 뒤, 다시 KPSS 검정을 수행한다.
+```{r, message=FALSE, warning=FALSE}
+google_2018 |>
+mutate(diff_close = difference(Close)) |>
+features(diff_close, unitroot_kpss)
+```
+이번에는 p값이 0.1로 나타나며,
+→ 데이터는 정상(stationary) 으로 판단된다.
+
+## 자동 차분 결정: unitroot_ndiffs()
+
+여러 번의 KPSS 검정을 수동으로 수행하지 않고, 필요한 1차 차분의 횟수를 자동으로 결정하는 함수:
+
+```{r}
+google_2018 |>
+features(Close, unitroot_ndiffs)
+```
+
+→ 1차 차분이 필요함을 나타냄.
+
+즉, ndiffs = 1 ⇒ 한 번의 차분으로 정상성을 확보할 수 있다.
+
+## 계절 차분의 필요성 판단
+
+계절성이 있는 시계열에서는 **계절 차분(seasonal differencing)** 이 필요한지를 판단해야 한다.
+
+이를 위해 `unitroot_nsdiffs()` 함수를 사용한다.
+
+## 계절 강도(Seasonal Strength)
+
+이 함수는 **계절 강도(seasonal strength, \( F_S \))** 값을 이용하여 필요한 계절 차분 횟수를 결정한다.
+
+\[
+F_S < 0.64 \quad \Rightarrow \quad \text{계절 차분 불필요}
+\]
+\[
+F_S \ge 0.64 \quad \Rightarrow \quad \text{1회의 계절 차분 필요}
+\]
+
+> ✅ 정리  
+> - \( F_S \)는 데이터 내 계절성이 얼마나 강한지를 측정하는 지표  
+> - 계절성이 약하면(0.64 미만) 차분 불필요  
+> - 계절성이 강하면(0.64 이상) **1회 계절 차분 필요**
+
+
+## 예시: 호주 전체 소매판매 
+```{r, message=FALSE, warning=FALSE}
+aus_total_retail <- aus_retail |>
+summarise(Turnover = sum(Turnover))
+
+# 로그 변환 후 계절 차분 판단
+
+aus_total_retail |>
+mutate(log_turnover = log(Turnover)) |>
+features(log_turnover, unitroot_nsdiffs)
+```
+→ 계절 차분 1회 필요 (nsdiffs = 1)
+
+
+## 계절 차분 후, 추가로 1차 차분 판단
+```{r, message=FALSE, warning=FALSE}
+aus_total_retail |>
+mutate(log_turnover = difference(log(Turnover), 12)) |>
+features(log_turnover, unitroot_ndiffs)
+```
+→ 계절 차분 1회 + 1차 차분 1회가 필요함을 의미한다.
+
+## 단위근 검정 요약 (Summary of Unit Root Tests)
+
+### 주요 함수와 해석
+
+| 함수 | 목적 | 출력값 | 의미 |
+|:---------------------|:----------------------------------|:---------:|:--------------------------------|
+| `unitroot_kpss()` | KPSS 검정 (정상성 여부 판별) | p값 | p < 0.05 → **비정상** |
+| `unitroot_ndiffs()` | 필요한 1차 차분 수 계산 | 정수 | `ndiffs = 0` 또는 `1` |
+| `unitroot_nsdiffs()` | 필요한 계절 차분 수 계산 | 정수 | `nsdiffs = 0` 또는 `1` |
+
+## 결론
+
+- **KPSS 및 단위근 검정(Unit Root Tests)** 을 활용하면   시계열이 **몇 번의 차분을 통해 정상성을 확보할 수 있는지**   객관적으로 판단할 수 있다.
+
+> 즉, 검정 결과는 데이터의 **비정상성(Non-stationarity)** 을  **차분 횟수(differencing order)** 형태로 정량화해 준다.
+
+
+# 후방이동 연산자 (Backward Shift Operator)
+
+##  개념 소개
+
+**후방이동 연산자(backward shift operator)** \( B \) 는  
+시계열의 **지연(lag)** 을 간편하게 표현하기 위한 표기법이다.
+
+\[
+B y_t = y_{t-1}
+\]
+
+(일부 참고문헌에서는 “lag”의 의미로 \( L \)을 사용하기도 한다.)
+
+즉, \( B \)가 \( y_t \)에 작용하면 데이터를 한 시점 뒤로 이동시키는 효과를 가진다.
+
+##  후방이동 연산자의 확장
+
+두 번 적용하면 2시점 전 값을 얻는다.
+
+\[
+B(B y_t) = B^2 y_t = y_{t-2}
+\]
+
+월별 데이터(monthly data)의 경우, “전년도 같은 달(the same month last year)”을 나타낼 때는:
+
+\[
+B^{12} y_t = y_{t-12}
+\]
+
+## 차분(differencing)의 수식 표현
+
+후방이동 연산자는 **차분 연산(differencing)** 을 간결히 표현하는 데 유용하다.
+
+1차 차분은 다음과 같다.
+
+\[
+y'_t = y_t - y_{t-1} = y_t - B y_t = (1 - B)y_t
+\]
+
+따라서 1차 차분은 연산자 \((1 - B)\)로 표현할 수 있다.
+
+## 2차 차분 
+
+2차 차분은 다음과 같이 나타낼 수 있다.
+
+\[
+\begin{aligned}
+y''_t &= y_t - 2y_{t-1} + y_{t-2} \\
+      &= (1 - 2B + B^2)y_t \\
+      &= (1 - B)^2 y_t
+\end{aligned}
+\]
+
+## 일반화된 d차 차분 
+
+일반적으로, **d차 차분(d-th order difference)**은다음과 같이 표현할 수 있다.
+
+\[
+(1 - B)^d y_t
+\]
+
+즉, 차분의 차수가 증가할수록 \((1 - B)\)를 반복적으로 적용하는 형태로 일반화된다.
+
+## 연산자의 대수적 성질
+
+후방이동 연산자는 **일반적인 대수 규칙(algebraic rules)** 을 따르므로 곱셈, 결합, 전개 등의 연산이 가능하다.
+
+특히, **계절 차분(seasonal differencing)** 과 **1차 차분(first differencing)** 을 결합할 때 유용하다.
+
+## 예시: 계절 + 1차 차분의 결합
+
+\[
+(1 - B)(1 - B^m)y_t
+\]
+
+이를 전개하면:
+
+\[
+(1 - B - B^m + B^{m+1})y_t
+= y_t - y_{t-1} - y_{t-m} + y_{t-m-1}
+\]
+
+이 결과는 앞서 유도한 **이중 차분(seasonal + first difference)** 과 동일하다.
+
+> ✅ 정리  
+> - \( B \): 데이터를 한 시점 뒤로 이동시키는 연산자  
+> - \( (1 - B) \): 1차 차분  
+> - \( (1 - B)^d \): d차 차분  
+> - \( (1 - B)(1 - B^m) \): 1차 + 계절 차분 결합
+
+# 자기회귀모형 (Autoregressive Models)
+
+##  자기회귀모형의 개념
+
+**다중회귀모형(multiple regression model)** 은 예측변수(predictors)의 선형결합(linear combination)을 이용해  관심 변수(예측 대상)를 예측했다.
+
+**자기회귀모형(autoregressive model, AR model)** 은 이와 달리 **과거 시점의 자기 자신의 값(past values)** 을 이용해 현재 값을 예측한다.
+
+> 즉, “자기회귀(autoregression)”란 변수를 자기 자신에 대해 회귀(regression)시키는 것이다.
+
+## 일반적인 AR(p) 모형의 형태
+
+자기회귀모형의 차수(order)가 \(p\)일 때, AR(\(p\)) 모형은 다음과 같이 표현된다.
+
+\[
+y_t = c + \phi_1 y_{t-1} + \phi_2 y_{t-2} + \cdots + \phi_p y_{t-p} + \varepsilon_t
+\]
+
+여기서  
+- \(\varepsilon_t\): 평균 0, 분산 \(\sigma^2\)의 백색잡음(white noise)  
+- \(p\): 회귀에 포함된 시차(lags)의 개수
+
+이 모형은 다중회귀식과 유사하지만, 예측변수가 외생변수 대신 **지연된 \(y_t\) 값들(lagged values)** 로 구성되어 있다.
+
+##  자기회귀모형의 유연성
+
+- AR 모형은 다양한 시계열 패턴을 유연하게 표현할 수 있다.  
+
+- 모수(parameter) \(\phi_1, \ldots, \phi_p\) 값의 변화에 따라 시계열의 모양이 크게 달라진다.
+
+- 오차항 \(\varepsilon_t\)의 분산은 시계열의 **규모(scale)** 만 바꾸고 **패턴(pattern)** 자체에는 영향을 주지 않는다.
+
+##  예시: AR(1)과 AR(2) 모형
+
+두 가지 서로 다른 자기회귀모형의 예시를 살펴보자.
+
+왼쪽:  
+\[
+y_t = 18 - 0.8 y_{t-1} + \varepsilon_t
+\]
+
+오른쪽:  
+\[
+y_t = 8 + 1.3 y_{t-1} - 0.7 y_{t-2} + \varepsilon_t
+\]
+
+두 경우 모두  
+\(\varepsilon_t \sim \text{WN}(0,1)\) (정규분포를 따르는 백색잡음)
+
+## 서로 다른 파라미터를 가진 모형의 예시
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=5.5, fig.height=3}
+library(fpp3)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+set.seed(123)
+n <- 100
+
+# AR(1): y_t = 18 - 0.8 y_{t-1} + e_t
+ar1 <- arima.sim(n = n, model = list(ar = -0.8), sd = 1) + 18
+
+# AR(2): y_t = 8 + 1.3 y_{t-1} - 0.7 y_{t-2} + e_t
+ar2 <- arima.sim(n = n, model = list(ar = c(1.3, -0.7)), sd = 1) + 8
+
+# tsibble 생성 시 index 지정 필수!
+tsibble(
+  Time = 1:n,
+  AR1 = ar1,
+  AR2 = ar2,
+  index = Time
+) |>
+  pivot_longer(-Time, names_to = "Model", values_to = "Value") |>
+  ggplot(aes(x = Time, y = Value)) +
+  geom_line() +
+  facet_wrap(~Model, scales = "free_y") +
+  labs(
+    title = "Examples of AR(1) and AR(2) processes",
+    subtitle = expression(paste(epsilon[t], " ~ White Noise(0, 1)")),
+    y = expression(y[t])
+  ) +
+  theme_minimal()
+```
+
+## AR(1) 모형의 다양한 특성
+
+AR(1) 모형은 다음과 같이 표현된다.
+
+\[
+y_t = c + \phi_1 y_{t-1} + \varepsilon_t
+\]
+
+모수(parameter) \(\phi_1\)과 \(c\) 값에 따라 다양한 형태의 시계열 패턴이 나타난다.
+
+| 조건 | 결과적 형태 |
+|:------------------|:------------------------------------|
+| \(\phi_1 = 0, \; c = 0\) | \(y_t\)는 **백색잡음(white noise)** |
+| \(\phi_1 = 1, \; c = 0\) | \(y_t\)는 **랜덤워크(random walk)** |
+| \(\phi_1 = 1, \; c \neq 0\) | \(y_t\)는 **드리프트를 포함한 랜덤워크(random walk with drift)** |
+| \(\phi_1 < 0\) | \(y_t\)는 **평균 주위에서 진동(oscillation)** 함 |
+
+## 정상성 조건의 필요성
+
+자기회귀모형은 일반적으로 **정상 시계열(stationary series)** 에만 적용된다.  
+따라서 모수(parameter)의 값은 다음 조건을 만족해야 한다.
+
+### AR(1) 모형의 조건
+
+\[
+-1 < \phi_1 < 1
+\]
+
+### AR(2) 모형의 조건
+
+\[
+-1 < \phi_2 < 1, \quad 
+\phi_1 + \phi_2 < 1, \quad 
+\phi_2 - \phi_1 < 1
+\]
+
+### AR(p) 모형 (\(p \ge 3\))
+
+- 제약조건이 훨씬 복잡하지만, `fable` 패키지는 모형 추정 시 이러한 제약을 자동으로 적용한다.
+
+
+# 이동평균모형 (Moving Average Models)
+
+##  이동평균모형의 개념
+
+**이동평균모형(Moving Average model, MA model)** 은 과거의 예측변수 값이 아닌,  **과거의 오차항(forecast errors)** 을 이용하여 시계열을 설명한다.
+
+\[
+y_t = c + \varepsilon_t + \theta_1 \varepsilon_{t-1}
+      + \theta_2 \varepsilon_{t-2} + \cdots + \theta_q \varepsilon_{t-q}
+\]
+
+여기서  
+- \(\varepsilon_t\): 평균 0, 분산 \(\sigma^2\) 의 백색잡음(white noise)  
+- \(q\): 모형의 차수(order)
+
+이 모형을 **MA(\(q\)) 모형**이라 부른다.
+
+##  MA 모형의 의미
+
+각 시점의 \(y_t\)는 과거 오차항들의 **가중 이동평균(weighted moving average)** 으로 볼 수 있다.  
+
+하지만 일반적인 이동평균(smoothing)과는 다르다.
+
+| 구분 | 목적 |
+|------|------|
+| **이동평균모형 (MA model)** | 미래 값을 예측 (forecasting) |
+| **이동평균 평활(MA smoothing)** | 과거 추세(trend-cycle)를 추정 |
+
+## 예시: MA(1)과 MA(2) 모형
+
+- 왼쪽: MA(1)  
+  \[
+  y_t = 20 + \varepsilon_t + 0.8\varepsilon_{t-1}
+  \]
+
+- 오른쪽: MA(2)  
+  \[
+  y_t = \varepsilon_t - \varepsilon_{t-1} + 0.8\varepsilon_{t-2}
+  \]
+
+\(\varepsilon_t \sim N(0,1)\), 즉 평균 0, 분산 1의 정규 백색잡음이다.
+
+## 예시: MA(1)과 MA(2) 모형
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=5.5, fig.height=3.8}
+set.seed(123)
+n <- 100
+
+# MA(1): y_t = 20 + e_t + 0.8 e_{t-1}
+ma1 <- arima.sim(n = n, model = list(ma = 0.8), sd = 1) + 20
+
+# MA(2): y_t = e_t - e_{t-1} + 0.8 e_{t-2}
+ma2 <- arima.sim(n = n, model = list(ma = c(-1, 0.8)), sd = 1)
+
+tsibble(
+  Time = 1:n,
+  MA1 = ma1,
+  MA2 = ma2,
+  index = Time
+) |>
+  pivot_longer(-Time, names_to = "Model", values_to = "Value") |>
+  ggplot(aes(x = Time, y = Value)) +
+  geom_line() +
+  facet_wrap(~Model, scales = "free_y") +
+  labs(title = "Examples of MA(1) and MA(2) processes",
+       subtitle = expression(paste(epsilon[t], " ~ White Noise(0, 1)")),
+       y = expression(y[t])) +
+  theme_minimal()
+```
+
+## 모수 변화에 따른 패턴 (Effect of Parameter Changes)
+
+### MA 모형의 파라미터 변화
+
+- \(\theta_1, \ldots, \theta_q\) 값을 바꾸면 다양한 시계열 패턴(time series patterns)을 얻을 수 있다.  
+- 오차항의 분산(variance of \(\varepsilon_t\))은 시계열의 **규모(scale)** 만 바꾸며, **패턴(pattern)** 에는 영향을 주지 않는다.
+
+
+##  AR 모형과 MA 모형의 관계 
+
+### AR 모형을 MA(∞)로 표현
+
+모든 **정상 AR(\(p\)) 모형**은 **MA(∞) 모형**으로 표현가능하다.  
+
+예를 들어, AR(1) 모형을 반복 대입(substitution)하면:
+
+\[
+\begin{aligned}
+y_t &= \phi_1 y_{t-1} + \varepsilon_t \\
+    &= \phi_1 (\phi_1 y_{t-2} + \varepsilon_{t-1}) + \varepsilon_t \\
+    &= \phi_1^2 y_{t-2} + \phi_1 \varepsilon_{t-1} + \varepsilon_t \\
+    &= \phi_1^3 y_{t-3} + \phi_1^2 \varepsilon_{t-2}
+       + \phi_1 \varepsilon_{t-1} + \varepsilon_t
+\end{aligned}
+\]
+
+##  AR(1)의 MA(∞) 표현 
+
+### AR(1) → MA(∞)
+
+\[
+y_t = \varepsilon_t + \phi_1 \varepsilon_{t-1}
+      + \phi_1^2 \varepsilon_{t-2}
+      + \phi_1^3 \varepsilon_{t-3} + \cdots
+\]
+
+단,  
+\(-1 < \phi_1 < 1\) 이면 \(\phi_1^k\) 값은 \(k\)가 커질수록 0에 수렴한다.
+
+> 따라서 AR(1) 모형은 MA(∞) 형태로 표현 가능하다.
+
+## MA 모형의 가역성
+
+### MA → AR(∞)
+
+반대로, 적절한 제약조건을 부여하면 MA(\(q\)) 모형은 AR(∞) 형태로 표현할 수 있다.  
+
+이때 모형을 **가역(invertible)** 하다고 한다.
+
+예를 들어, MA(1) 모형은 다음과 같다.
+
+\[
+y_t = \varepsilon_t + \theta_1 \varepsilon_{t-1}
+\]
+
+이를 AR(∞) 형태로 변환하면:
+
+\[
+\varepsilon_t = \sum_{j=0}^{\infty} (-\theta_1)^j y_{t-j}
+\]
+
+## 가역성 조건 (Invertibility Constraints)
+
+### 조건 해석
+
+- \(|\theta_1| > 1\):  
+  지연(lag)이 커질수록 가중치 증가 → **비현실적**
+
+- \(|\theta_1| = 1\):  
+  모든 시차(lag)의 영향이 동일 → **비현실적**
+
+- \(|\theta_1| < 1\):  
+  최근 관측값이 과거보다 더 큰 영향 → **가역(invertible)**
+
+> 따라서 MA 모형이 현실적으로 타당하려면 \(|\theta_1| < 1\) 이어야 한다.
+
+## MA 모형의 제약조건 요약 
+
+| 모형 | 제약조건 |
+|:-------|:------------------------------------|
+| **MA(1)** | \(-1 < \theta_1 < 1\) |
+| **MA(2)** | \(-1 < \theta_2 < 1,\ \theta_2 + \theta_1 > -1,\ \theta_1 - \theta_2 < 1\) |
+| **MA(q ≥ 3)** | 제약조건이 더 복잡하지만 `fable` 패키지가 자동 처리 |
+
+### ✅ 정리
+
+- **MA 모형**은 과거의 오차항(\(\varepsilon\))을 이용해 시계열을 예측한다.  
+- **정상 AR 모형**은 MA(∞) 형태로 표현 가능하다.  
+- **가역성 조건 (\(|\theta_i| < 1\))** 을 만족해야 정상적이고 현실적인 모형으로 간주된다.
+
+
+
+
+
+
+
+
+
+
+
