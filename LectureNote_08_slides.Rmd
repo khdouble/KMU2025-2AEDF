@@ -1,0 +1,911 @@
+---
+title: "경제자료분석과 예측 - #08 동적회귀모형"
+author: "경제학과 김현학 교수"
+date: "2025년 2학기"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+# ---- 전역 옵션 ----
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width=7, fig.height=3.6, cache=FALSE, dev='png', dpi=150)
+
+# 프로젝트 루트 기준 경로 고정
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+# --------------------------------
+
+suppressPackageStartupMessages({
+  library(tsibble); library(fabletools); library(fable); library(feasts); library(rprojroot) # rprojroot 추가
+  library(dplyr); library(ggplot2); library(lubridate); library(tsibbledata)
+  library(tidyr); library(knitr);library(fpp3);library(seasonal);library(x13binary);library(purrr); library(transformer); library(gganimate);library(tidyverse)
+})
+```
+
+# 동적 회귀모형 소개 (Dynamic Regression Models)
+
+## 1. 배경
+앞 선 두 장의 시계열 모형은 시계열의 **과거 관측값만** 사용하지만,휴일, 경쟁사 활동, 법률 변화, 거시경제 상황 등 **외부 요인**도 변동성 설명 및 예측 향상에 중요한 역할을 할 수 있다.
+
+반면 회귀모형은 다양한 예측변수를 포함할 수 있으나 ARIMA가 제공하는 **시계열 동학(time series dynamics)**을 반영하지 못한다.
+
+이 장에서는 **ARIMA 모형을 확장하여 외부 정보(예측변수)를 포함하는 방법**을 다룬다.
+
+
+## 2. 회귀모형 복습
+회귀모형은 다음과 같다.
+
+\[
+y_t = \beta_0 + \beta_1 x_{1,t} + \cdots + \beta_k x_{k,t} + \varepsilon_t
+\]
+
+- \(y_t\): 종속변수  
+- \(x_{1,t}, \dots, x_{k,t}\): 예측변수  
+- \(\varepsilon_t\): 백색잡음(white noise) 오차  
+
+잔차의 자기상관 여부는 **Ljung–Box test** 등으로 확인한다.
+
+## 3. 회귀모형의 오차에 자기상관 허용
+이 장에서는 회귀모형의 오차가 **자기상관을 가질 수 있도록** 설정한다.
+
+이를 위해 오차항 표기를 \(\varepsilon_t \rightarrow \eta_t\)로 변경한다.
+
+오차항 \(\eta_t\)는 **ARIMA 모형**을 따른다고 가정한다.
+
+예: \(\eta_t \sim \text{ARIMA}(1,1,1)\)
+
+\[
+y_t = \beta_0 + \beta_1 x_{1,t} + \cdots + \beta_k x_{k,t} + \eta_t
+\]
+
+\[
+(1 - \phi_1 B)(1 - B)\eta_t = (1 + \theta_1 B)\varepsilon_t
+\]
+
+여기서 \(\varepsilon_t\)는 백색잡음이다.
+
+
+## 4. 오차항의 구성
+모형에는 **두 종류의 오차항**이 존재한다.
+
+1. **회귀모형 오차:** \(\eta_t\)  
+2. **ARIMA 오차:** \(\varepsilon_t\)
+
+단, 백색잡음으로 가정하는 것은 **ARIMA 오차 \(\varepsilon_t\)**뿐이다.
+
+### 요약
+
+- 단순 회귀모형 + ARIMA 오차 구조 → 더 강력한 예측 가능  
+- 외생변수 포함 + 시계열 동학 반영  
+- 동적회귀모형의 핵심 개념을 구성하는 출발점
+
+# 회귀 + ARIMA 오차: 추정의 핵심 원리
+
+## 1. 왜 \(\varepsilon_t\)의 제곱합을 최소화해야 하는가?
+회귀식의 오차항을 ARIMA 구조로 모델링할 경우, 모수추정은 **\(\varepsilon_t\)(ARIMA 오차)의 제곱합 최소화**를 기준으로 이루어진다.
+
+만약 오차의 자기상관을 무시하고  **\(\eta_t\)(단순 회귀잔차)**의 제곱합을 최소화하면 다음 문제가 발생한다.
+
+## 1. 왜 \(\varepsilon_t\)의 제곱합을 최소화해야 하는가?
+
+### 발생하는 문제들
+1. **계수 추정값 \(\hat{\beta}_t\)가 최적이 아님**  
+   - 자기상관을 무시하여 정보 손실 발생
+
+2. **t-검정 등 통계검정이 잘못됨**
+
+3. **AICc 기반 모형비교가 무의미**
+
+4. **p-값이 실제보다 작게 평가됨 → 가짜 회귀(spurious regression)**  
+   - 중요하지 않은 변수가 중요한 것처럼 보임
+
+### 대안
+- \(\varepsilon_t\) 최소화가 정답  
+- 또는 **최대우도추정(MLE)**을 사용해도 유사한 결과를 얻음
+
+
+## 2. 정상성 요구사항 
+ARMA 오차를 포함한 회귀모형 추정 시에는 다음이 **반드시 정상성**이어야 한다.
+
+- 종속변수 \(y_t\)
+- 모든 예측변수 \(x_{1,t}, \dots, x_{k,t}\)
+
+### 정상성이 필요하지 않은 예외
+- **공적분(cointegration)**이 존재하는 경우  
+- 비정상 변수들이 특정 선형결합을 이루어 정상성을 가지면  
+  → 계수는 **일관적 추정량(consistenct)**
+
+
+## 3. 비정상 변수 → 차분 필요
+비정상 변수가 존재하면 **차분(differencing) 수행**  
+관계식의 형태를 유지하기 위해 보통 **모든 변수 전체를 차분**
+
+### 용어 구분
+- **모델 in levels:** 원자료를 그대로 사용
+- **모델 in differences:** 차분된 자료를 사용
+
+
+## 4. ARIMA 오차모형의 동등한 표현
+모든 변수가 정상적이면, 오차항에 대해 **ARMA 과정만** 고려하면 됨.
+
+ARIMA(1,1,1) 오차를 가진 회귀모형을 차분하면:
+
+### 차분된 형태
+\[
+y'_t = \beta_1 x'_{1,t} + \cdots + \beta_k x'_{k,t} + \eta'_t
+\]
+
+오차 구조:
+\[
+(1 - \phi_1 B)\eta'_t = (1 + \theta_1 B)\varepsilon_t
+\]
+
+여기서  
+- \(y'_t = y_t - y_{t-1}\)  
+- \(x'_{i,t} = x_{i,t} - x_{i,t-1}\)  
+- \(\eta'_t = \eta_t - \eta_{t-1}\)
+
+## 4. ARIMA 오차모형의 동등한 표현
+
+### 핵심 결론
+> **회귀모형 + ARIMA 오차 = 차분된 회귀모형 + ARMA 오차**
+
+
+### 요약
+- 오차의 자기상관을 고려하지 않으면 추정, 검정, 모형비교 모두 왜곡  
+- 정상성은 필수, 공적분은 예외  
+- ARIMA 오차모형은 차분모형과 해석적으로 동등
+
+
+# ARIMA 오차를 이용한 회귀분석 feat. fable
+
+## 1. ARIMA()의 기본 동작
+- formula에 외생변수(x)를 포함하면  
+  → **ARIMA 오차를 가진 회귀모형**을 적합
+- `pdq(p,d,q)`는 **오차항의 ARIMA 차수 지정**
+
+### 차분(differencing)을 지정하면?
+→ 회귀식의 **모든 변수에 차분을 동일하게 적용**
+
+
+## 2. 예시
+```{r}
+ARIMA(y ~ x + pdq(1,1,0))
+```
+
+다음 명령은 다음의 차분모형을 적합한다.
+
+\[
+y'_t = \beta_1 x'_t + \eta'_t
+\]
+
+오차항은 AR(1) 구조를 갖는다.
+
+\[
+\eta'_t = \phi_1 \eta'_{t-1} + \varepsilon_t
+\]
+
+## 2. 동등한 수준(Level) 모형
+
+위 모형은 다음 수준모형과 동등하다.
+
+\[
+y_t = \beta_0 + \beta_1 x_t + \eta_t
+\]
+
+- \(\eta_t\): **ARIMA(1,1,0)** 오차  
+- 차분(differencing) 때문에 **상수항 \(\beta_0\) 사라짐**
+
+### 차분된 모형에 상수를 포함하려면?
+model formula에 `+ 1` 추가
+
+
+## 3. 자동 ARIMA 오차 선택 기능
+
+`pdq()`를 지정하지 않으면 **오차항 ARIMA 자동 선택**
+
+### 절차
+1. OLS 회귀식 추정  
+2. 잔차에 **KPSS test** 적용 → 정상성 판단  
+3. 비정상적이면 **모든 변수 차분**  
+4. 차분된 데이터로 **최대우도추정(MLE)** 재적합  
+5. 결과는 **원래(level) 변수 기준**으로 출력됨
+
+## 4. AICc 기반 예측변수 선택
+
+- 최종 모형의 **AICc 계산**
+- 고려할 predictor subset 전체에 대해 절차 반복
+- **AICc 최소 모델** 선택
+
+# 예제: 미국 소비(Consumption)와 소득(Income)의 변화율 관계
+
+## 1. 데이터 개요
+- 기간: 1970 ~ 2019 Q2  
+- 변수:
+  - 개인 소비지출(percentage change)
+  - 개인 가처분소득(percentage change)
+
+### 분석 목표
+소득 변화가 소비 변화에 미치는 **즉각적 평균 효과** 추정
+
+> 현실적으로 소득 변화 → 소비 변화까지 시차가 있지만  본 예제에서는 단순화를 위해 무시함.
+
+## 1. 데이터 개요
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+us_change |>
+  pivot_longer(c(Consumption, Income),
+               names_to = "var", values_to = "value") |>
+  ggplot(aes(x = Quarter, y = value)) +
+  geom_line() +
+  facet_grid(vars(var), scales = "free_y") +
+  labs(title = "US consumption and personal income",
+       y = "Quarterly % change")
+```
+
+## 2. 정상성 확인
+- 변수들이 **변화율**이므로 이미 **정상성** 가정 충족  
+- → 차분( 불필요
+```{r}
+fit <- us_change |>
+  model(ARIMA(Consumption ~ Income))
+report(fit)
+```
+
+
+
+## 3. 적합된 회귀 + ARIMA 오차모형
+
+### (1) 회귀식
+\[
+y_t = 0.595 + 0.198 x_t + \eta_t
+\]
+
+### (2) 오차항의 ARIMA 구조
+\[
+\eta_t
+= 0.707\eta_{t-1}
++ \varepsilon_t
+- 0.617\varepsilon_{t-1}
++ 0.207\varepsilon_{t-2}
+\]
+
+### (3) innovation residuals
+\[
+\varepsilon_t \sim NID(0,\ 0.311)
+\]
+
+
+## 4. 잔차 복원
+`residuals()` 함수로 다음 두 가지 잔차를 복원할 수 있다.
+
+- \(\eta_t\): 회귀오차  
+- \(\varepsilon_t\): ARIMA innovation residuals  
+
+### 주의
+> **백색잡음(white noise)에 가까워야 하는 오차는**
+> **innovation residuals (\(\varepsilon_t\))** 이다.
+
+## 4. 잔차 복원
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+bind_rows(
+    `Regression residuals` =
+        as_tibble(residuals(fit, type = "regression")),
+    `ARIMA residuals` =
+        as_tibble(residuals(fit, type = "innovation")),
+    .id = "type"
+  ) |>
+  mutate(
+    type = factor(type, levels=c(
+      "Regression residuals", "ARIMA residuals"))
+  ) |>
+  ggplot(aes(x = Quarter, y = .resid)) +
+  geom_line() +
+  facet_grid(vars(type))
+
+```
+
+## 4. 잔차 복원
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+fit |> gg_tsresiduals()
+```
+
+## 4. 잔차 복원
+```{r}
+augment(fit) |>
+  features(.innov, ljung_box, dof = 3, lag = 8)
+```
+
+# 예측: 회귀 + ARIMA 오차모형의 예측
+
+## 1. 예측의 기본 원리
+ARIMA 오차를 가진 회귀모형에서 예측하려면
+
+1) 회귀식의 예측  
+2) ARIMA 오차항의 예측  
+
+을 모두 수행하여 **결합**해야 한다.
+
+### 예측변수의 미래값 필요
+- 미래값이 **이미 알려진 경우** (예: 시간, 요일 등) → 단순  
+- 미래값이 **알려지지 않은 경우**  
+  → 예측변수 자체를 모델링하거나  
+  → **시나리오 기반 미래값**을 사용
+
+## 2. 예제: 미국 개인소비와 소득
+
+### 가정
+향후 8개 분기 동안  
+- 가처분소득 변화율 = 과거 40년 평균 변화율
+
+### 특징
+- 회귀모형에 공변량(소득)이 포함되므로  
+  **ARIMA-only 모델보다 예측구간이 좁아짐**
+- 하지만 중요한 점:
+  > 회귀모형의 예측구간은  
+  > **예측변수 자체의 미래 예측 불확실성을 반영하지 않음**
+
+따라서 예측구간은  
+**조건부(conditional) 예측구간**으로 해석해야 한다.
+
+## 2. 예제: 미국 개인소비와 소득
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.4}
+us_change_future <- new_data(us_change, 8) |>
+  mutate(Income = mean(us_change$Income))
+forecast(fit, new_data = us_change_future) |>
+  autoplot(us_change) +
+  labs(y = "Percentage change")
+```
+
+## 3. 예제: 전력수요 예측
+
+### 데이터
+- daily demand  
+- daily max temperature  
+- public holiday indicator  
+(데이터: `vic_elec_daily`)
+
+### 패턴
+- U자형 관계 (추운 날·더운 날 수요 증가)  
+- 비선형 + 동적 특성 필요  
+  → quadratic regression + ARMA errors 사용
+
+## 3. 예제: 전력수요 예측
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+vic_elec_daily <- vic_elec |>
+  filter(year(Time) == 2014) |>
+  index_by(Date = date(Time)) |>
+  summarise(
+    Demand = sum(Demand) / 1e3,
+    Temperature = max(Temperature),
+    Holiday = any(Holiday)
+  ) |>
+  mutate(Day_Type = case_when(
+    Holiday ~ "Holiday",
+    wday(Date) %in% 2:6 ~ "Weekday",
+    TRUE ~ "Weekend"
+  ))
+
+vic_elec_daily |>
+  ggplot(aes(x = Temperature, y = Demand, colour = Day_Type)) +
+  geom_point() +
+  labs(y = "Electricity demand (GW)",
+       x = "Maximum daily temperature")
+```
+
+## 3. 예제: 전력수요 예측
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+vic_elec_daily |>
+  pivot_longer(c(Demand, Temperature)) |>
+  ggplot(aes(x = Date, y = value)) +
+  geom_line() +
+  facet_grid(name ~ ., scales = "free_y") + ylab("")
+```
+
+
+## 3. 예제: 전력수요 예측
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+fit <- vic_elec_daily |>
+  model(ARIMA(Demand ~ Temperature + I(Temperature^2) +
+                (Day_Type == "Weekday")))
+fit |> gg_tsresiduals()
+```
+
+## 3. 예제: 전력수요 예측
+
+### 적합 모형
+- Quadratic regression + workday indicator  
+- Error: **ARIMA(2,1,2)(2,0,0)[7]**  
+- 총 6개 AR/MA 계수
+
+## 3. 예제: 전력수요 예측
+```{r, message=FALSE, warning=FALSE}
+augment(fit) |>
+  features(.innov, ljung_box, dof = 6, lag = 14)
+```
+
+### 잔차 진단
+- 이분산성 존재  
+- 일부 자기상관 잔존  
+- 긴 꼬리(long tails)  
+→ 예측구간 신뢰도는 낮아질 수 있으나  
+→ **점예측은 여전히 유효**
+
+## 4. 14일 ahead 예측
+
+시작일: 2015-01-01 (목, 공휴일)
+
+### 시나리오 기반 예측
+- 향후 14일간의 최고기온을 **26°C**로 가정  
+- (기상청 예측을 사용할 수도 있으나 예제에서는 단순화)
+
+## 4. 14일 ahead 예측
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+vic_elec_future <- new_data(vic_elec_daily, 14) |>
+  mutate(
+    Temperature = 26,
+    Holiday = c(TRUE, rep(FALSE, 13)),
+    Day_Type = case_when(
+      Holiday ~ "Holiday",
+      wday(Date) %in% 2:6 ~ "Weekday",
+      TRUE ~ "Weekend"
+    )
+  )
+forecast(fit, vic_elec_future) |>
+  autoplot(vic_elec_daily) +
+  labs(title="Daily electricity demand: Victoria",
+       y="GW")
+```
+
+
+## 4. 14일 ahead 예측
+### 예측 결과
+- 2014년 말 전력수요 감소가 모형에 반영되어  
+  → 2015년 첫 2주도 **낮은 전력수요 예측**  
+- 휴가철 seasonal effect가 영향을 미침
+
+### 요약
+- 회귀+ARIMA 모형은 예측변수의 미래값이 필수  
+- 공변량을 포함하면 예측불확실성을 줄일 수 있음  
+- 전력수요 예측은 비선형성과 계절성, ARMA 오류 모두 중요  
+- 시나리오 기반 예측은 실무에서 매우 유용한 접근
+
+
+# 확률적(Stochastic) vs 결정적(Deterministic) 추세
+
+## 1. 선형 추세의 두 가지 모델링 방식
+
+### ■ 결정적 추세 (Deterministic Trend)
+\[
+y_t = \beta_0 + \beta_1 t + \eta_t
+\]
+- \(\eta_t\): **ARMA 과정**
+
+
+
+### ■ 확률적 추세 (Stochastic Trend)
+\[
+y_t = \beta_0 + \beta_1 t + \eta_t
+\]
+- \(\eta_t\): **ARIMA 과정, \(d = 1\)**
+
+## 1. 선형 추세의 두 가지 모델링 방식
+
+#### 차분하면
+\[
+y'_t = \beta_1 + \eta'_t
+\]
+→ 즉,
+\[
+y_t = y_{t-1} + \beta_1 + \eta'_t
+\]
+
+- 랜덤워크 + drift와 유사  
+- 다만 오차가 ARMA임
+
+## 2. 예제: 1970–2016년 호주 국내 항공사 여객 수송량
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+aus_airpassengers |>
+  autoplot(Passengers) +
+  labs(y = "Passengers (millions)",
+       title = "Total annual air passengers")
+```
+
+## 2. 예제: 호주 항공 여객 수송량
+### (1) 결정적 추세 모형
+```{r}
+fit_deterministic <- aus_airpassengers |>
+  model(deterministic = ARIMA(Passengers ~ 1 + trend() +
+                                pdq(d = 0)))
+report(fit_deterministic)
+```
+
+## 2. 예제: 호주 항공 여객 수송량
+### (1) 결정적 추세 모형
+\[
+y_t = 0.901 + 1.415 t + \eta_t
+\]
+\[
+\eta_t = 0.956\eta_{t-1} + \varepsilon_t,
+\quad
+\varepsilon_t \sim NID(0,4.343)
+\]
+
+- **연간 증가량 ≈ 1.42백만 명**
+
+## 2. 예제: 호주 항공 여객 수송량
+### (2) 확률적 추세 모형
+```{r}
+fit_stochastic <- aus_airpassengers |>
+  model(stochastic = ARIMA(Passengers ~ pdq(d = 1)))
+report(fit_stochastic)
+```
+
+
+## 2. 예제: 호주 항공 여객 수송량
+### (2) 확률적 추세 모형
+\[
+y_t - y_{t-1} = 1.419 + \varepsilon_t
+\]
+
+또는,
+
+\[
+y_t = y_0 + 1.419 t + \eta_t
+\]
+\[
+\eta_t = \eta_{t-1} + \varepsilon_t,
+\quad
+\varepsilon_t \sim NID(0,4.271)
+\]
+
+- **연간 증가량 ≈ 1.42백만 명**
+
+## 3. 예측구간의 차이
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+aus_airpassengers |>
+  autoplot(Passengers) +
+  autolayer(
+    fit_stochastic |> forecast(h = 20),
+    colour = "#0072B2", level = 95,
+    series = "확률적 추세"
+  ) +
+  autolayer(
+    fit_deterministic |> forecast(h = 20),
+    colour = "#D55E00", alpha = 0.65, level = 95,
+    series = "결정적 추세"
+  ) +
+  labs(
+    y = "Air passengers (millions)",
+    title = "Forecasts from trend models"
+  )
+```
+
+## 3. 예측구간의 차이
+
+- 증가량은 비슷하지만  
+  **확률적 추세의 예측구간이 훨씬 넓음**
+- 이유: 확률적 추세는 **비정상 오차(누적되는 불확실성)**
+
+## 4. 해석의 차이
+
+### 결정적 추세
+- 기울기(증가율)가 **시간에 따라 변하지 않는다고 가정**
+
+### 확률적 추세
+- 추세가 **시간에 따라 변할 수 있음**  
+- 추정 증가율 = 과거 평균 증가율  
+- 미래에도 동일하다는 보장은 없음
+
+## 5. 결론: 어느 모델이 더 안전한가?
+
+- **장기 예측 → 확률적 추세(Stochastic Trend)가 더 안전**  
+- 예측구간이 미래 불확실성을 더 잘 반영하기 때문
+
+# 동적 조화 회귀 
+
+
+## 1. 왜 조화 호귀를 사용하는가?
+
+### 긴 계절주기 예
+- Daily: 365
+- Weekly: 52
+- Half-hourly: 하루 48을 포함한 다중 계절성
+
+ARIMA/ETS의 계절성은 **짧은 주기(12, 4 등)** 에 최적화되어 있음.  
+계절 주기 \(m\) 일 때 초기 계절 상태 파라미터가 **\(m-1\)** 개 필요 →  
+**m이 크면 추정 불가능**
+
+`ARIMA()`는 \(m \le 350\) 허용하지만 실제론 **m ≥ 200부터 메모리 문제** 발생.
+
+## 2. 해결책: 동적조화회귀(Dynamic Harmonic Regression)
+
+계절 패턴:
+
+- Fourier 항으로 모델링
+
+단기(time-series) 동학:
+
+- ARMA 오차로 설명
+
+### **Fourier항이란?** 
+
+- 계절성을 **사인(sin)과 코사인(cos) 함수**로 표현하여 어떤 길이의 계절성이라도 유연하게 모델링할 수 있다.
+
+
+## Fourier 항의 기본 아이디어
+
+Fourier 정리(Fourier theorem):
+
+> “어떤 주기적 함수도 여러 개의 사인·코사인 함수의 조합으로 표현할 수 있다.”
+
+\[
+S_t = \sum_{k=1}^{K} \left[
+a_k \sin\left( \frac{2\pi k t}{m} \right)
++
+b_k \cos\left( \frac{2\pi k t}{m} \right)
+\right]
+\]
+
+여기서  
+- \(m\) = 계절 주기(예: 연간=365, 월간=12)  
+- \(k\) = harmonic index (1, 2, ..., K)  
+- \(K\) = sin-cos pair의 개수  
+- \(a_k\), \(b_k\) = 계수(coefficient)
+
+
+## Fourier 항이 의미하는 것
+
+### (1) 주파수와 k의 의미  
+- \(k = 1\) → 가장 부드러운 1차 계절 패턴  
+- \(k = 2\) → 더 빠르게 진동하는 패턴  
+- \(k = 3\) 이상 → 점점 더 복잡하고 ‘울퉁불퉁한(wiggly)’ 패턴
+
+즉, K가 커질수록 보다 다양한 형태의 계절성을 반영할 수 있다.
+
+## 서로 다른 K에 따른 Fourier항의 계절 패턴
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+# 12개월 계절성을 가진 time index 생성
+t <- 1:12
+m <- 12  # monthly seasonality
+
+# Fourier 함수 생성(단일 K 입력)
+fourier_terms <- function(t, K, m){
+  map_dfc(1:K, ~ tibble(
+    !!paste0("sin", .x) := sin(2*pi*.x*t/m),
+    !!paste0("cos", .x) := cos(2*pi*.x*t/m)
+  ))
+}
+
+# 계절패턴 시각화를 위한 데이터 생성
+df <- map_dfr(1:6, function(K){
+  ft <- fourier_terms(t, K, m)
+  pattern <- ft |> as.matrix() |> rowSums()  # Fourier 합 성분
+  tibble(
+    t = t,
+    pattern = pattern,
+    K = factor(K)
+  )
+})
+
+# 시각화
+ggplot(df, aes(x = t, y = pattern, colour = K)) +
+  geom_line(linewidth = 1) +
+  facet_wrap(~K, ncol = 2) +
+  labs(
+    title = "Seasonal Pattern by Fourier K",
+    x = "Month (t)",
+    y = "Seasonal pattern",
+    colour = "K"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+
+
+
+
+## 3. Fourier항의 장점
+
+1. **어떤 길이의 seasonality도 가능**
+2. 여러 seasonality → 각 주기의 Fourier term 포함 가능
+3. 부드러움 조정 가능  
+   - \(K\): Fourier sin/cos pair 개수  
+   - 적은 K → 부드러운 계절패턴
+4. 단기 동학을 ARMA로 간단히 모델링
+
+## 4. Fourier항의 단점
+
+- 계절성은 **시간에 따라 변하지 않는다고 가정**  
+- 하지만 실무에서는 seasonality가 대부분 매우 안정적 → 큰 문제 아님
+
+## 5. 예제: 호주 외식지출 (2004–2018)
+
+- 월별 카페·레스토랑·테이크아웃 지출  
+- 목표: **24개월 ahead forecast**  
+- Fourier 항 \(K = 1 \sim 6\) 사용  
+  - \(K=6\) = seasonal dummy 포함과 동일
+
+### K 증가 효과
+- 더 복잡한(wiggly) 계절 패턴 반영  
+- 오차 ARIMA는 더 단순해짐  
+- **AICc 최소는 K=6**  
+  - K=4→5에서 큰 차이 발생
+
+→ **K=6 모델로 예측 수행**
+
+## 5. 예제: 호주 외식지출 (2004–2018)
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+aus_cafe <- aus_retail |>
+  filter(
+    Industry == "Cafes, restaurants and takeaway food services",
+    year(Month) %in% 2004:2018
+  ) |>
+  summarise(Turnover = sum(Turnover))
+
+fit <- model(aus_cafe,
+  `K = 1` = ARIMA(log(Turnover) ~ fourier(K=1) + PDQ(0,0,0)),
+  `K = 2` = ARIMA(log(Turnover) ~ fourier(K=2) + PDQ(0,0,0)),
+  `K = 3` = ARIMA(log(Turnover) ~ fourier(K=3) + PDQ(0,0,0)),
+  `K = 4` = ARIMA(log(Turnover) ~ fourier(K=4) + PDQ(0,0,0)),
+  `K = 5` = ARIMA(log(Turnover) ~ fourier(K=5) + PDQ(0,0,0)),
+  `K = 6` = ARIMA(log(Turnover) ~ fourier(K=6) + PDQ(0,0,0))
+)
+
+fit |>
+  forecast(h = "2 years") |>
+  autoplot(aus_cafe, level = 95) +
+  facet_wrap(vars(.model), ncol = 2) +
+  guides(colour = "none", fill = "none", level = "none") +
+  geom_label(
+    aes(x = yearmonth("2007 Jan"), y = 4250,
+        label = paste0("AICc = ", format(AICc))),
+    data = glance(fit),
+    size=2
+  ) +
+  labs(title= "Total monthly eating-out expenditure",
+       y="$ billions")
+```
+
+# 시차 예측변수
+
+## 1. 왜 시차(lagged) 효과를 고려해야 하는가?
+
+- 어떤 예측변수의 효과는 **즉각적이지 않을 수 있음**
+- 예)  
+  - 광고 캠페인 → 캠페인 종료 후에도 지속적인 판매 효과  
+  - 안전정책 변화 → 처음에는 사고 감소, 시간이 지나면 효과 약화  
+
+👉 따라서 회귀모형에 **과거의 예측변수 값(lags)** 을 포함해야 정확한 모형을 만들 수 있음.
+
+
+## 2. 시차 변수를 포함한 회귀 + ARIMA 오차모형
+
+예측변수 \(x_t\)에 대해 최대 \(k\) 시차까지 포함하면:
+
+\[
+y_t = \beta_0
++ \gamma_0 x_t
++ \gamma_1 x_{t-1}
++ \cdots
++ \gamma_k x_{t-k}
++ \eta_t
+\]
+
+- \(\eta_t\): ARIMA 오차과정  
+- \(k\): 시차 길이 (AICc로 선택)  
+- ARIMA 오차의 \(p, q\)와 함께 동시에 선택 가능
+
+
+## 3. 예제: TV 광고와 보험 견적
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+insurance |>
+  pivot_longer(Quotes:TVadverts) |>
+  ggplot(aes(x = Month, y = value)) +
+  geom_line() +
+  facet_grid(vars(name), scales = "free_y") +
+  labs(y = "", title = "Insurance advertising and quotations")
+```
+
+## 3. 예제: TV 광고와 보험 견적
+
+### (1) 데이터
+- 미국 보험회사  
+- 기간: 2002 Jan ~ 2005 Apr  
+- 변수:
+  - 보험 견적 수(종속변수)
+  - TV 광고비(예측변수)
+
+### (2) 모형 비교 설정
+- 광고비의 시차 0~3까지 포함 가능  
+- 모든 모형은 **동일한 훈련 구간**을 사용(앞 3개월 제외)
+
+## 3. 예제: TV 광고와 보험 견적
+- 모형을 fitting
+```{r}
+fit <- insurance |>
+  # Restrict data so models use same fitting period
+  mutate(Quotes = c(NA, NA, NA, Quotes[4:40])) |>
+  # Estimate models
+  model(
+    lag0 = ARIMA(Quotes ~ pdq(d = 0) + TVadverts),
+    lag1 = ARIMA(Quotes ~ pdq(d = 0) +
+                 TVadverts + lag(TVadverts)),
+    lag2 = ARIMA(Quotes ~ pdq(d = 0) +
+                 TVadverts + lag(TVadverts) +
+                 lag(TVadverts, 2)),
+    lag3 = ARIMA(Quotes ~ pdq(d = 0) +
+                 TVadverts + lag(TVadverts) +
+                 lag(TVadverts, 2) + lag(TVadverts, 3))
+  )
+```
+
+## 3. 예제: TV 광고와 보험 견적
+### (3) 최적 시차 선택
+```{r}
+glance(fit)
+```
+
+- 기준: **AICc**  
+- 결과: **lag1 모델이 최적**  
+  - 포함된 예측변수: \(x_t\), \(x_{t-1}\)
+
+## 4. 선택된 최종모형
+```{r}
+fit_best <- insurance |>
+  model(ARIMA(Quotes ~ pdq(d = 0) +
+              TVadverts + lag(TVadverts)))
+report(fit_best)
+```
+
+## 4. 선택된 최종모형
+
+\[
+y_t = 2.155 + 1.253 x_t + 0.146 x_{t-1} + \eta_t
+\]
+
+오차항:
+
+\[
+\eta_t
+= 0.512 \eta_{t-1}
++ \varepsilon_t
++ 0.917 \varepsilon_{t-1}
++ 0.459 \varepsilon_{t-2}
+\]
+
+- ARIMA(1,0,2) 오차
+- \(\varepsilon_t\): white noise
+
+## 5. 예측(Forecasting)
+
+미래 예측을 위해서는 **광고비의 미래값**이 필요.
+
+예:
+- 광고비가 앞으로 **모든 달에서 8 단위**라고 가정 → 예측 생성
+
+👉 시차효과가 있는 회귀모형에서는  
+   **예측변수 미래값(또는 시나리오 기반 값)** 이 반드시 필요함.
+
+## 5. 예측(Forecasting)
+```{r, message=FALSE, warning=FALSE, echo=FALSE,fig.width=5.4, fig.height=3.6}
+insurance_future <- new_data(insurance, 20) |>
+  mutate(TVadverts = 8)
+fit_best |>
+  forecast(insurance_future) |>
+  autoplot(insurance) +
+  labs(
+    y = "Quotes",
+    title = "Forecast quotes with future advertising set to 8"
+  )
+```
+
+
+
+## 요약
+
+- 시차효과는 마케팅·정책·경제 변수에서 매우 흔함
+- 시차 길이(k)는 AICc로 선택
+- 회귀 + ARIMA 오차 = 강력한 예측 모형
+- 예측 시 predictor의 미래값 가정이 필요
+
+
+
